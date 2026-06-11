@@ -15,7 +15,29 @@ replay the `session` cookie from a logged-in browser.
 
 Login itself is a manual browser step (Doug types credentials). We persist the session with
 `playwright-cli state-save .auth/state.json` and restore with `state-load`. The cookie does
-expire; when calls start returning 401/redirects, re-do the manual login and re-save.
+expire; on expiry, re-do the manual login and re-save.
+
+Verified 2026-06-11 that the `session` cookie alone is sufficient (plain `curl` with just
+`Cookie: session=<token>` returns 200 + JSON — no UA, referer, or other header needed).
+
+### Auth-failure signature (how the client detects an expired session)
+
+Probe an **account-scoped** endpoint — `GET /orders/past` is a good one (cheap, no side
+effects). Expired/invalid session returns **HTTP 401** with this exact body:
+
+```json
+{ "statusCode": 401, "error": "Unauthorized", "message": "Unauthorized", "code": "E_01_0000", "owner": "Keplr" }
+```
+
+A valid session returns 200. So the client should: treat `401` / `code: E_01_0000` on a
+known-good endpoint as **"session expired → prompt re-login"**, and treat other failures
+(5xx, network, schema mismatch) as **"API may have changed → fail loudly"**, keeping the two
+distinct.
+
+Do **not** probe auth with `/cart` or `/cart/light`: those return `404` with
+`code: E_08_0005` ("Le panier est introuvable") for *both* an expired session and a valid
+session with no cart — ambiguous. Also note `/api/auth/me` appears as a React-Query cache
+key carrying the user identity, but it is **not** a working GET endpoint (404); don't use it.
 
 All prices are integers in **cents** (`itemPrice: 424` = 4,24 €). Weights are in the unit
 named alongside them (usually kg).
@@ -37,7 +59,9 @@ named alongside them (usually kg).
 | GET | `/account/bookmarks` | Flat bookmarks. |
 | GET | `/account/products/sku` | Account product SKUs (reorder history). |
 | GET | `/account/recipes/ids` | Saved recipe ids. |
-| GET | `/navigation` | Category navigation tree. |
+| GET | `/navigation` | Category navigation tree — see "Browse by category". |
+| GET | `/category/{slug}` | Category contents (subcategories and/or products) — see "Browse by category". |
+| GET | `/articleDetailBySlug/{slug}` | **Single product detail** (keyed by slug, not id) — see "Single product". |
 | GET | `/sitemap.xml` | Product/category sitemap (also in robots.txt). |
 
 ## Search
@@ -51,11 +75,17 @@ named alongside them (usually kg).
   ```
 - `GET /search/popular` — popular search terms (no query).
 - `GET /search2?type=PRODUCT&text=<q>&modelVersion=ordinal_df` — **the main product search.**
-  `type=RECIPE` returns recipes instead. Response:
+  `type=RECIPE` returns recipes instead. It is **text search only** — there is no category
+  filter (passing `category`/`categoryId`/etc. is ignored and yields 0 results; use
+  `/category/{slug}` to browse instead). Response:
   ```json
-  { "count": 50, "items": [ /* product objects */ ], "algoVersion": "...", "next": "<cursor?>" }
+  { "count": 87, "items": [ /* up to 50 product objects */ ], "algoVersion": "...", "next": "10du-0e8F" }
   ```
-  `next` appears to be the pagination cursor (not yet exercised).
+  **Pagination:** `count` is the total; each page returns up to 50 `items`. `next` is an
+  opaque cursor token — fetch the next page by appending **`&next=<token>`** to the same
+  query. Repeat until the response has **no `next`** (last page). Verified 2026-06-11:
+  `tomate` → 87 total, page 1 = 50 items + `next`, page 2 (`&next=...`) = remaining 37 items,
+  no `next`. (Only the param name `next` works; `cursor`/`after`/`from`/`page` are ignored.)
 
 ### Product object (search2 `items[]`)
 
@@ -88,6 +118,57 @@ named alongside them (usually kg).
   "shortDescription": "...", "attributes": [...], "labels": [...]
 }
 ```
+
+## Browse by category
+
+Browsing is server-rendered on the site (no XHR fires on a category page load), but the
+underlying endpoints are these two, used together:
+
+**`GET /navigation`** — the full menu tree. Shape:
+```jsonc
+{
+  "families": [                              // 7 top-level families
+    {
+      "id": "nBHl1CNZ9VchkvXJ", "name": "Fruits & Légumes",
+      "link": "https://www.mon-marche.fr/categorie/fruits",   // family landing (a category slug)
+      "categories": [                        // e.g. "fruits", "legumes"
+        { "id": "...", "name": "Fruits", "slug": "fruits",
+          "children": [ { "id": "...", "name": "Fruits de saison", "slug": "fruits-de-saison" }, ... ] }
+      ]
+    }, ...
+  ],
+  "recipe": {...}, "home": {...}
+}
+```
+Families: *À l'affiche, Fruits & Légumes, Boucherie & Poissonnerie, Fromagerie & Traiteur,
+Épicerie & Boissons, Entretien Soins & Bébé, Promotions.* Families carry a `link` but no
+`slug`; the browsable units are `categories[]` and their `children[]`, each with a `slug`.
+
+**`GET /category/{slug}`** — contents of one category. Same shape for parent and leaf; which
+field is populated tells you where you are:
+- **Parent** (e.g. `/category/fruits`): `subcategories[]` populated (drill down by their
+  `slug`), `items` empty.
+- **Leaf** (e.g. `/category/tomates`): `items[]` populated with the listing, plus a `parent`
+  ref back up.
+
+`items[]` is a **mixed feed** — filter by `type`:
+```
+items[].type ∈ { "PRODUCT", "RECIPE", "CUSTOM_CONTENT" }   // CUSTOM_CONTENT = editorial banner
+```
+`type === "PRODUCT"` items use the same product shape as `/search2` (canonicalId, pricing,
+itemPrice, …), so they feed straight into the cart mutation below. There's no visible
+pagination on `/category/{slug}` (leaf returns the whole listing in one call).
+
+Browse algorithm for the client: `/navigation` to enumerate slugs → `/category/{slug}`;
+if `subcategories` is non-empty, recurse, else read `items` filtered to `PRODUCT`.
+
+## Single product
+
+**`GET /articleDetailBySlug/{slug}`** — full detail for one product, **keyed by `slug`** (the
+product object's `slug`, e.g. from search/category results), not by id. Returns 200 with the
+search product shape plus extras: `description` (long), `breadcrumbs`, `rating`,
+`relatedArticles`, `seo`, `enabled`. There is no by-id detail endpoint (`/product/{id}`,
+`/products/{id}` etc. all 404) — go via slug.
 
 ## Cart mutation (add / set quantity / remove)
 
