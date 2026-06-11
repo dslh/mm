@@ -19,6 +19,9 @@ expire; on expiry, re-do the manual login and re-save.
 
 Verified 2026-06-11 that the `session` cookie alone is sufficient (plain `curl` with just
 `Cookie: session=<token>` returns 200 + JSON — no UA, referer, or other header needed).
+This holds for **mutations too**: `PATCH /cart/product` from plain `curl` with only the
+cookie + `content-type` succeeds (200, cart updated) — no `Origin`/`Referer` check and no
+CSRF token. Verified 2026-06-11 with a full add→remove round-trip from outside the browser.
 
 **Lifetime:** the `session` cookie is `httpOnly`, `Secure`, `SameSite=Lax`, with a **~60-day
 expiry** (issued 2026-06-11, expires 2026-08-10). So re-login is roughly a two-month cadence
@@ -66,6 +69,7 @@ named alongside them (usually kg).
 | GET | `/account/bookmarks` | Flat bookmarks. |
 | GET | `/account/products/sku` | Account product SKUs (reorder history). |
 | GET | `/account/recipes/ids` | Saved recipe ids. |
+| POST | `/addresses/deliverySlots2` | Available delivery windows for a location — see "Delivery slots". |
 | GET | `/navigation` | Category navigation tree — see "Browse by category". |
 | GET | `/category/{slug}` | Category contents (subcategories and/or products) — see "Browse by category". |
 | GET | `/articleDetailBySlug/{slug}` | **Single product detail** (keyed by slug, not id) — see "Single product". |
@@ -212,7 +216,11 @@ increment). Request body:
 ```
 
 - `id` is the **`canonicalId`**, not the compound `id` with `$`.
-- `quantity` is the target count (in `granularity` units / pieces).
+- `quantity` is the target count (in `granularity` units / pieces). This is uniform across
+  the catalog: only two `itemDefinition.type` values exist (surveyed 2026-06-11 across
+  produce/cheese/meat/dairy searches) — `arbitraryQuantity` (priced per weight, e.g. loose
+  tomatoes) and `pieceWeight` (fixed-weight pieces, e.g. a barquette). **Both are ordered as
+  an integer count of granularity units**; there is no fractional/per-kg quantity mode.
 - `source` is optional analytics metadata; safe to omit or set a fixed value.
 - Returns the **full cart object** (same schema as `GET /cart`).
 - `quantity: 0` removes the product from the cart. Verified 2026-06-11 (PATCH returned
@@ -303,6 +311,59 @@ Top-level keys:
 
 Delivery thresholds (from `delivery.deliveryPrices`): free shipping at 80,00 €
 (`minCartNetPrice: 8000`), 3,99 € from 60,00 €, else 5,99 €.
+
+## Delivery slots
+
+### List available windows — `POST /api/addresses/deliverySlots2`
+
+Request body is the delivery target (read it from the cart's `delivery.address`):
+```json
+{ "location": { "lat": 48.8017, "lng": 2.2772 }, "postalCode": "92320", "countryCode": "FR" }
+```
+Response: `{ "deliveryZones": [ ... ] }`. Each zone:
+```jsonc
+{
+  "id": "0YBfbouSg", "name": "Zone JAUNE", "type": "delivery",
+  "shop": { "id": "muX8iUUIg", "name": "Thiais" },
+  "minOrderAmount": 4000,                 // cents — zone minimum (distinct from free-shipping threshold)
+  "deliveryPrices": [...], "messages": [...], "specialEvents": [...],
+  "preferredTimeSlotSchedule": {...}, "suggestedTimeSlots": [...],
+  "deliverySlots": [ /* the windows */ ]
+}
+```
+A `deliverySlot` (59 returned in the sample, 56 selectable):
+```jsonc
+{
+  "id": "Kh-DjTXIgR",
+  "from": 1781269200000, "to": 1781276400000,   // epoch ms — the window
+  "orderUntil": 1781236800000,                   // epoch ms — order-by deadline
+  "deliveryMode": "onFleet",
+  "isFull": false, "isExpired": false, "isExcluded": false,   // <-- selectable only if all three false
+  "daysLimit": 5,
+  "extraPrice": { "currency": "EUR", "dutyFree": 0 },          // e.g. peak slots add +3,00 €
+  "deliveryPricesWithDeltas": [...], "rate": {...},
+  "activeDeliveryPrice": {...}, "initialOrder": null
+}
+```
+This endpoint is the answer to "show me available delivery windows." Filter to
+`!isFull && !isExpired && !isExcluded`. Times are epoch-ms; `orderUntil` is the cutoff to
+order for that window.
+
+### Selecting a window — partially mapped (⚠ verify before relying on it)
+
+Picking a slot fires **`PATCH /api/cart/initialOrder`**, but the capture on 2026-06-11 was
+taken while the account had an **in-progress order** (a placed order still open for
+additions — the cart shows the slot as "Commande en cours" and you can add items until
+`orderUntil`). In that mode the cart *binds to the existing order* and the request body was
+`{ "orderId": "<existingOrderId>" }` — **not** a `timeSlotId` — and a companion
+`POST /api/orders/taskDeliveryInfos` with `{ "orderIds": [...] }` fetches delivery info for
+those orders. So what we captured is the "attach to in-progress order" path, **not** the
+clean "choose a fresh slot for a new cart" contract (which presumably sends a slot `id`).
+
+That clean contract was deliberately **not** captured: changing the slot while a real order
+is in progress would alter that order's delivery time (outward-facing, hard to reverse), so
+it needs either a fresh-cart state or Doug's explicit OK to change-and-restore. **TODO:
+re-capture slot selection from a clean cart.**
 
 ## Telemetry to ignore
 
