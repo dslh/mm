@@ -20,6 +20,13 @@ expire; on expiry, re-do the manual login and re-save.
 Verified 2026-06-11 that the `session` cookie alone is sufficient (plain `curl` with just
 `Cookie: session=<token>` returns 200 + JSON — no UA, referer, or other header needed).
 
+**Lifetime:** the `session` cookie is `httpOnly`, `Secure`, `SameSite=Lax`, with a **~60-day
+expiry** (issued 2026-06-11, expires 2026-08-10). So re-login is roughly a two-month cadence
+— the "session expired, please re-login" path is real but infrequent, and can be a clear
+error rather than a prominent always-on affordance. Whether activity rolls the expiry forward
+is unconfirmed (would need elapsed time to observe). The cookie's `expires` can be read from
+`.auth/state.json` without exposing the token, to warn ahead of expiry.
+
 ### Auth-failure signature (how the client detects an expired session)
 
 Probe an **account-scoped** endpoint — `GET /orders/past` is a good one (cheap, no side
@@ -170,6 +177,25 @@ search product shape plus extras: `description` (long), `breadcrumbs`, `rating`,
 `relatedArticles`, `seo`, `enabled`. There is no by-id detail endpoint (`/product/{id}`,
 `/products/{id}` etc. all 404) — go via slug.
 
+## Catalog scoping (what's global vs session-specific)
+
+`/search2` and `/category/{slug}` are **public** — they return 200 without a session cookie.
+Verified 2026-06-11 by comparing authenticated vs anonymous responses:
+
+- **`canonicalId` and prices are global** — identical with and without the session (same id
+  set, same `itemPrice`). → **Safe to cache product ids and prices across sessions** for
+  reorder/shopping lists.
+- **`availableQuantity` is session/zone-scoped** — anonymous requests return a flat `200`
+  placeholder; the authenticated session returns real stock for the delivery zone (e.g. 171,
+  106). The product set can also differ slightly (an item out of stock for the zone may drop
+  out). → **Never trust a cached `availableQuantity`; always re-read it under the live
+  session before relying on it**, and let the add-time `E_ECOM_*` errors be the source of
+  truth for "can I actually buy this right now."
+
+The compound `id` (`<canonicalId>$<...>`) appears consistent with this: the `canonicalId`
+half is global, the suffix reflects zone/shop fulfilment. Cart mutations key off the global
+`canonicalId` only.
+
 ## Cart mutation (add / set quantity / remove)
 
 **`PATCH /api/cart/product`** — sets the **absolute** quantity for a product (not an
@@ -192,6 +218,38 @@ increment). Request body:
 - `quantity: 0` removes the product from the cart. Verified 2026-06-11 (PATCH returned
   200 and the product was absent from the returned cart).
 
+### Failure modes (verified 2026-06-11)
+
+All product-level failures return a **4xx with a structured `E_ECOM_*` `code`** and a French
+`message`. This is the key signal: a structured `E_ECOM_*` body means "the product/quantity
+is the problem" (recoverable — search-fallback or adjust), whereas an unstructured failure
+(5xx, HTML, or a 4xx with no `E_ECOM` code) means "auth or API changed" (fail loudly).
+
+| Case | HTTP | `code` | `message` | Client action |
+|------|------|--------|-----------|---------------|
+| Unknown / stale `canonicalId` | 404 | `E_ECOM_01_0012` | "Le produit n'est plus disponible pour le créneau sélectionné" | Fall back to `/search2` by name |
+| Product out of stock (`availableQuantity: 0`) | 400 | `E_ECOM_01_0004` | "Le produit n'est pas disponible pour le créneau sélectionné" | Skip / offer alternative |
+| Quantity > available | 400 | `E_ECOM_01_0003` | "La quantité sélectionnée n'est pas disponible" | Retry clamped to `availableQuantity` |
+
+Important: oversell is **rejected, not clamped or oversold** — the request fails and the
+cart keeps its previous quantity (verified: a 999999 request on a ~171-stock item returned
+400 and the cart line stayed at 1). The client must do the clamping itself.
+
+(Error namespace seen so far: `E_01_*` = auth, `E_08_*` = cart-not-found, `E_ECOM_01_*`
+= product/quantity. See the Authentication section for `E_01_0000`.)
+
+### Cart bootstrap
+
+An authenticated session **always has a cart**: `GET /cart` returns `200` with `products: []`
+when empty (a fresh cart is auto-created after checkout — verified post-order). Adding the
+first item is just a normal `PATCH /cart/product`; no separate "create cart" step is needed,
+and the delivery `timeSlot`/`address` carry over from the previous order. The `404`
+`E_08_0005` ("Le panier est introuvable") is the **anonymous / no-session** case, not a
+normal state for a logged-in client. (A true logged-in 404 — e.g. a brand-new account that
+never had a cart — wasn't reproducible here since the existing cart can't be deleted via the
+API; treat it as unverified. The delivery-slot dependency for adding items is also untested,
+because a slot was already set.)
+
 ### Reorder flow
 
 `GET /orders/past` (list) → `GET /orders/{id}` (detail, has canonicalId + quantity) →
@@ -206,8 +264,9 @@ increment). Request body:
 ```
 
 Note: a product's exact `canonicalId` can change over time (seasonal produce, relisted
-items) and may no longer be available — when reordering, fall back to a name/SKU search
-(`/search2`) if a direct add by `canonicalId` fails.
+items) and may no longer be available — when a direct add by `canonicalId` fails with
+`E_ECOM_01_0012` (stale id) or `E_ECOM_01_0004` (out of stock), fall back to a name/SKU
+search (`/search2`). See "Failure modes" above for the full code list.
 
 ## Cart object schema (GET /cart, and PATCH response)
 
