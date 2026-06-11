@@ -108,8 +108,8 @@ increment). Request body:
 - `quantity` is the target count (in `granularity` units / pieces).
 - `source` is optional analytics metadata; safe to omit or set a fixed value.
 - Returns the **full cart object** (same schema as `GET /cart`).
-- Removal is presumed to be `quantity: 0` (inferred, not yet verified — the UI has a
-  "Retirer le produit" control that should confirm it).
+- `quantity: 0` removes the product from the cart. Verified 2026-06-11 (PATCH returned
+  200 and the product was absent from the returned cart).
 
 ### Reorder flow
 
