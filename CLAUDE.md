@@ -52,8 +52,16 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
 - [x] Map auth, search, and cart endpoints via playwright-cli network capture
 - [x] Document endpoints (request/response shapes) in `docs/api.md`
 - [x] Order history + reorder path mapped (`/orders/past` → `/orders/{id}`)
-- [ ] Decide CLI vs MCP server (or CLI first, MCP wrapper later)
-- [ ] Implement client
+- [x] Decide CLI vs MCP server → **CLI first, MCP wrapper later** (rationale in `docs/design.md`)
+- [x] Implement client — v1 CLI (`mm`) working end-to-end, verified live 2026-06-11
+- [ ] MCP server as a thin wrapper over `internal/ops`
+
+## Code
+
+Go module `github.com/dslh/mm` (private repo, this working tree). Layout per
+`docs/design.md`: `internal/api` (typed client: pacing, session state, error taxonomy),
+`internal/ops` (smart operations: resolve/clamp/batch/reorder), `cmd/mm` (CLI).
+Build: `go build -o bin/mm ./cmd/mm`. Run `mm help` for the command surface.
 
 ## Notes on driving the API
 

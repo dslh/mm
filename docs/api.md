@@ -58,8 +58,10 @@ Do **not** probe auth with `/cart` or `/cart/light`: those return `404` with
 session with no cart — ambiguous. Also note `/api/auth/me` appears as a React-Query cache
 key carrying the user identity, but it is **not** a working GET endpoint (404); don't use it.
 
-All prices are integers in **cents** (`itemPrice: 424` = 4,24 €). Weights are in the unit
-named alongside them (usually kg).
+All prices are in **cents** (`itemPrice: 424` = 4,24 €) but are **not always integers**:
+fractional cents occur (verified 2026-06-11: `itemPrice: 206.25`, `perWeightUnit.net:
+824.25` in `/search2` results) — decode every price as a float and round for display.
+Weights are in the unit named alongside them (usually kg).
 
 ## Read endpoints
 
@@ -318,14 +320,20 @@ Top-level keys:
 }
 ```
 
-Delivery thresholds (from `delivery.deliveryPrices`): free shipping at 80,00 €
-(`minCartNetPrice: 8000`), 3,99 € from 60,00 €, else 5,99 €.
+Delivery thresholds (from `delivery.deliveryPrices`, tiers of
+`{ minCartNetPrice, shippingAmount }`): free shipping at 80,00 €
+(`minCartNetPrice: 8000`), 3,99 € from 60,00 €, else 5,99 €. Caveat (2026-06-11): a
+fresh cart not yet bound to a delivery slot returns a single placeholder tier
+`{ minCartNetPrice: 0, shippingAmount: 0 }` — the real tiers appear once a slot is set.
 
 ## Delivery slots
 
 ### List available windows — `POST /api/addresses/deliverySlots2`
 
-Request body is the delivery target (read it from the cart's `delivery.address`):
+Request body is the delivery target — read it from the cart's `delivery.address`:
+`location` is a flat key there, but the postal/country codes live in
+`delivery.address.addressComponents.{postalCode,countryCode}` (verified 2026-06-11; the
+address object is `{ addressComponents, formattedAddress, location, locationInfo }`):
 ```json
 { "location": { "lat": 48.8017, "lng": 2.2772 }, "postalCode": "92320", "countryCode": "FR" }
 ```
