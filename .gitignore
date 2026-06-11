@@ -1,0 +1,9 @@
+# credentials & session state — never commit
+.env
+.env.*
+*.har
+.auth/
+.playwright-cli/
+
+node_modules/
+__pycache__/
