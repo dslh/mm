@@ -24,11 +24,20 @@ cookie + `content-type` succeeds (200, cart updated) — no `Origin`/`Referer` c
 CSRF token. Verified 2026-06-11 with a full add→remove round-trip from outside the browser.
 
 **Lifetime:** the `session` cookie is `httpOnly`, `Secure`, `SameSite=Lax`, with a **~60-day
-expiry** (issued 2026-06-11, expires 2026-08-10). So re-login is roughly a two-month cadence
-— the "session expired, please re-login" path is real but infrequent, and can be a clear
-error rather than a prominent always-on affordance. Whether activity rolls the expiry forward
-is unconfirmed (would need elapsed time to observe). The cookie's `expires` can be read from
-`.auth/state.json` without exposing the token, to warn ahead of expiry.
+expiry**, and it is a **sliding window** — each authenticated request rolls the expiry
+forward to ~now + 60 days. Verified 2026-06-11: after ~56 min of activity the persisted
+`expires` had advanced by ~3384 s (matching real elapsed time), while the **token value was
+unchanged** (only the expiry attribute moves; the token does not rotate).
+
+Implications:
+- Re-login is needed only after **~60 days of total inactivity**. For any regularly-used
+  client the "session expired" path is rare — a clear error on `401 E_01_0000` suffices, no
+  prominent always-on affordance needed.
+- Because the token value is stable, a persisted `.auth/state.json` stays usable; but its
+  stored `expires` goes stale (pessimistic) as the live cookie rolls forward. The client
+  should **re-save state after activity** (or capture `Set-Cookie` from responses) so any
+  "warn ahead of expiry" logic reads an accurate date. The `expires` can be read from
+  `.auth/state.json` without exposing the token.
 
 ### Auth-failure signature (how the client detects an expired session)
 
