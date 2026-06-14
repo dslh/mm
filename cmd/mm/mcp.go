@@ -18,6 +18,21 @@ import (
 
 const mcpVersion = "1.0.0"
 
+// mcpInstructions is the server-level orientation sent once at initialize. It
+// carries the cross-cutting context (scope, units, workflow, id handoffs) so the
+// individual tool descriptions can stay lean.
+const mcpInstructions = `mon-marché is a French online grocery (Paris/Île-de-France delivery). These tools browse the catalog and manage one shopping cart under Doug's account.
+
+Scope: read the catalog, read and modify the cart, choose a delivery slot. That is all. Final review, checkout, and payment are always done by Doug in the browser — there is no tool for them, and you must never ask for or handle payment details.
+
+Units: every monetary amount is an integer number of euro cents (424 means 4,24 €). Quantities and stock are plain item counts.
+
+Typical workflow: find products with search or browse; inspect the cart with get_cart; add, change, or remove lines with cart_apply (the only cart-mutation tool); optionally pick a delivery window with list_slots then select_slot. To rebuild a previous order, use reorder.
+
+Identifiers connect the tools: search/browse return a product canonicalId (use it as cart_apply's id) and a slug (use it with get_product); list_orders returns an order id (use it with get_order or reorder); list_slots returns a slot id (use it with select_slot).
+
+Pacing: requests are deliberately rate-limited to stay human-paced. Batch related cart changes into a single cart_apply call rather than many separate ones, and avoid tight polling.`
+
 // cmdMCP runs the MCP server over stdio: a thin wrapper exposing internal/ops
 // as tools for Claude. Scope is identical to the CLI — browse/search and
 // cart read/mutate — and stops at the cart: no checkout, no payment.
@@ -45,7 +60,7 @@ func cmdMCP(ctx context.Context, args []string) error {
 		Name:    "mm",
 		Title:   "mon-marché shopping assistant",
 		Version: mcpVersion,
-	}, nil)
+	}, &mcp.ServerOptions{Instructions: mcpInstructions})
 	registerTools(srv, o)
 
 	// Clean shutdown on Ctrl-C / SIGTERM for manual runs; an MCP client
@@ -145,7 +160,7 @@ type applyArgs struct {
 
 func registerTools(s *mcp.Server, o *ops.Ops) {
 	mcpTool(s, "search",
-		"Search the mon-marché catalog. Returns matching products (canonicalId, name, slug, price in euro cents, stock). Use a product's canonicalId with cart_apply to add it.",
+		"Search the catalog by free text — use when you know roughly what you want by name (e.g. 'tomate cerise'). Returns matching products (canonicalId, name, slug, price in euro cents, stock). Use a product's canonicalId with cart_apply to add it.",
 		func(ctx context.Context, in searchArgs) (any, error) {
 			if in.All {
 				return o.API.SearchAll(ctx, in.Query, maxSearchPages)
@@ -154,7 +169,7 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 		})
 
 	mcpTool(s, "browse",
-		"Browse the catalog by category. With no slug, returns the navigation tree of families/categories; with a slug, returns that category's subcategories and products.",
+		"Browse the catalog by category — use to explore what's on offer rather than search for a named item. With no slug, returns the navigation tree of families/categories; with a slug, returns that category's subcategories and products.",
 		func(ctx context.Context, in browseArgs) (any, error) {
 			if in.Slug == "" {
 				return o.API.Navigation(ctx)
@@ -163,7 +178,7 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 		})
 
 	mcpTool(s, "get_product",
-		"Fetch full detail for one product by slug (price, stock, origin, description, promo).",
+		"Fetch full detail for one known product by slug — more than search/browse return (price in euro cents, stock, origin, description, promo). Use when you already have a slug and need the full record.",
 		func(ctx context.Context, in productArgs) (any, error) {
 			return o.API.ArticleBySlug(ctx, in.Slug)
 		})
