@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mm": {
+      "command": "./bin/mm",
+      "args": ["mcp"]
+    }
+  }
+}
