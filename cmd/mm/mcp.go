@@ -1,0 +1,245 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/dslh/mm/internal/api"
+	"github.com/dslh/mm/internal/ops"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const mcpVersion = "1.0.0"
+
+// cmdMCP runs the MCP server over stdio: a thin wrapper exposing internal/ops
+// as tools for Claude. Scope is identical to the CLI — browse/search and
+// cart read/mutate — and stops at the cart: no checkout, no payment.
+//
+// A single api.Client is shared across all tools so the pacing lock actually
+// serializes traffic, and every handler is additionally serialized through
+// mcpMu: requests stay human-paced (ToS review) and the (un-synchronized)
+// session state is never touched concurrently.
+func cmdMCP(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return usageError("mm mcp")
+	}
+	c, err := api.New(statePath())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := c.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "mm: saving session state:", err)
+		}
+	}()
+	o := &ops.Ops{API: c}
+
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "mm",
+		Title:   "mon-marché shopping assistant",
+		Version: mcpVersion,
+	}, nil)
+	registerTools(srv, o)
+
+	// Clean shutdown on Ctrl-C / SIGTERM for manual runs; an MCP client
+	// stopping the server just closes stdin, which ends Run on its own.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Fprintln(os.Stderr, "mm mcp: serving on stdio (cart only; checkout stays in the browser)")
+	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil &&
+		!errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+// mcpMu serializes every tool handler: only one API operation runs at a time.
+var mcpMu sync.Mutex
+
+// mcpTool registers a tool whose result is the same JSON shape the CLI emits
+// with --json. Out is `any`, so the SDK infers a schema for the typed input
+// but none for the output (server.go: output schema is skipped when Out==any),
+// then mirrors the returned value into both structuredContent and text. The
+// handler returns the view-shaped value directly — full control over what
+// leaves the process, which matters for the PII-stripping cart view.
+func mcpTool[In any](s *mcp.Server, name, desc string, fn func(context.Context, In) (any, error)) {
+	mcp.AddTool(s, &mcp.Tool{Name: name, Description: desc},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+			mcpMu.Lock()
+			defer mcpMu.Unlock()
+			out, err := fn(ctx, in)
+			if err != nil {
+				return nil, nil, mcpError(err)
+			}
+			return nil, out, nil
+		})
+}
+
+// mcpError turns the library's error taxonomy into actionable tool errors.
+// The SDK reports these to the model as an error result (isError) with the
+// message in the content, so the agent can see what went wrong and recover.
+func mcpError(err error) error {
+	var ae *api.APIError
+	if errors.As(err, &ae) && ae.IsAuth() {
+		return fmt.Errorf("session expired — recreate .auth/state.json via a browser login (see `mm auth login`): %w", err)
+	}
+	var de *api.DriftError
+	if errors.As(err, &de) {
+		return fmt.Errorf("the private API may have changed — re-verify against fresh browser traffic (docs/api.md): %w", err)
+	}
+	return err
+}
+
+// Tool input types. Descriptions ride along as JSON-schema annotations so the
+// model sees them; empty structs are tools that take no arguments.
+
+type searchArgs struct {
+	Query string `json:"query" jsonschema:"product search text, e.g. 'tomate cerise'"`
+	All   bool   `json:"all,omitempty" jsonschema:"follow all result pages instead of just the first (slower; paced)"`
+}
+
+type browseArgs struct {
+	Slug string `json:"slug,omitempty" jsonschema:"category slug to list; omit to get the top-level navigation tree"`
+}
+
+type productArgs struct {
+	Slug string `json:"slug" jsonschema:"product slug (from search/browse results)"`
+}
+
+type ordersArgs struct {
+	Limit int `json:"limit,omitempty" jsonschema:"max orders to return, most recent first; 0 or omitted returns all"`
+}
+
+type orderArgs struct {
+	ID string `json:"id" jsonschema:"order id from list_orders"`
+}
+
+type reorderArgs struct {
+	ID     string `json:"id" jsonschema:"past order id to rebuild into the cart"`
+	DryRun bool   `json:"dryRun,omitempty" jsonschema:"plan only: report the lines and availability without changing the cart"`
+}
+
+// applyLine mirrors ops.ApplyLine with schema annotations for the model.
+type applyLine struct {
+	Query string `json:"query,omitempty" jsonschema:"search query; the first matching product is used. Provide exactly one of query or id"`
+	ID    string `json:"id,omitempty" jsonschema:"exact product canonicalId. Provide exactly one of query or id"`
+	N     *int   `json:"n,omitempty" jsonschema:"increment quantity by N relative to what's in the cart (default 1). Use for adding"`
+	Set   *int   `json:"set,omitempty" jsonschema:"set absolute quantity; 0 removes the line. Takes precedence over n"`
+}
+
+type applyArgs struct {
+	Lines []applyLine `json:"lines" jsonschema:"cart changes applied in order, each adding/setting one product"`
+}
+
+func registerTools(s *mcp.Server, o *ops.Ops) {
+	mcpTool(s, "search",
+		"Search the mon-marché catalog. Returns matching products (canonicalId, name, slug, price in euro cents, stock). Use a product's canonicalId with cart_apply to add it.",
+		func(ctx context.Context, in searchArgs) (any, error) {
+			if in.All {
+				return o.API.SearchAll(ctx, in.Query, maxSearchPages)
+			}
+			return o.API.Search(ctx, in.Query, "")
+		})
+
+	mcpTool(s, "browse",
+		"Browse the catalog by category. With no slug, returns the navigation tree of families/categories; with a slug, returns that category's subcategories and products.",
+		func(ctx context.Context, in browseArgs) (any, error) {
+			if in.Slug == "" {
+				return o.API.Navigation(ctx)
+			}
+			return o.API.Category(ctx, in.Slug)
+		})
+
+	mcpTool(s, "get_product",
+		"Fetch full detail for one product by slug (price, stock, origin, description, promo).",
+		func(ctx context.Context, in productArgs) (any, error) {
+			return o.API.ArticleBySlug(ctx, in.Slug)
+		})
+
+	mcpTool(s, "get_cart",
+		"Show the current cart: line items with quantities, totals, and distance to free shipping. Monetary amounts are euro cents (424 = 4,24 €). Delivery address is never returned.",
+		func(ctx context.Context, _ struct{}) (any, error) {
+			cart, err := o.GetCart(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return viewCart(cart), nil
+		})
+
+	mcpTool(s, "cart_apply",
+		"Add to / set / remove cart items in one call. Each line targets a product by `query` (first search hit) or exact `id` (canonicalId), and either increments by `n` (default 1) or sets an absolute quantity with `set` (`set:0` removes). Quantities over stock are clamped and reported. Returns a per-line outcome plus the updated cart. This is the only cart-mutation tool; checkout and payment stay in the browser.",
+		func(ctx context.Context, in applyArgs) (any, error) {
+			lines := make([]ops.ApplyLine, len(in.Lines))
+			for i, l := range in.Lines {
+				lines[i] = ops.ApplyLine{Query: l.Query, ID: l.ID, N: l.N, Set: l.Set}
+			}
+			cart, outcomes, err := o.Apply(ctx, lines)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"outcomes": outcomes, "cart": viewCart(cart)}, nil
+		})
+
+	mcpTool(s, "list_orders",
+		"List past orders, most recent first (id, state, total in cents, delivery slot, product names). Use an id with get_order or reorder.",
+		func(ctx context.Context, in ordersArgs) (any, error) {
+			res, err := o.API.OrdersPast(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if in.Limit > 0 && len(res.Items) > in.Limit {
+				res.Items = res.Items[:in.Limit]
+			}
+			return res, nil
+		})
+
+	mcpTool(s, "get_order",
+		"Fetch one past order's detail: line items with canonicalIds and quantities, totals, delivery slot.",
+		func(ctx context.Context, in orderArgs) (any, error) {
+			return o.API.Order(ctx, in.ID)
+		})
+
+	mcpTool(s, "reorder",
+		"Rebuild the cart from a past order, adding each line's quantity on top of what's already in the cart. Stale or out-of-stock lines are reported with search suggestions, never auto-substituted. Use dryRun to preview without changing the cart.",
+		func(ctx context.Context, in reorderArgs) (any, error) {
+			order, cart, outcomes, err := o.Reorder(ctx, in.ID, in.DryRun)
+			if err != nil {
+				return nil, err
+			}
+			out := map[string]any{"orderId": order.ID, "dryRun": in.DryRun, "outcomes": outcomes}
+			if cart != nil {
+				out["cart"] = viewCart(cart)
+			}
+			return out, nil
+		})
+
+	mcpTool(s, "list_slots",
+		"List available delivery windows for the cart's delivery address (window times, order-by deadlines, any surcharge). Selecting a slot is not automated — Doug picks it in the browser.",
+		func(ctx context.Context, _ struct{}) (any, error) {
+			return o.Slots(ctx)
+		})
+
+	mcpTool(s, "auth_status",
+		"Check the mon-marché session: whether it's valid (live probe) and when the cookie expires. If invalid, Doug must re-login in a browser (see `mm auth login`).",
+		func(ctx context.Context, _ struct{}) (any, error) {
+			probeErr := o.API.ProbeAuth(ctx)
+			exp := o.API.SessionExpires() // read after the probe: a valid probe rolls it forward
+			out := map[string]any{
+				"valid":     probeErr == nil,
+				"expiresAt": exp.Format(time.RFC3339),
+				"daysLeft":  int(time.Until(exp).Hours() / 24),
+			}
+			if probeErr != nil {
+				out["detail"] = probeErr.Error()
+			}
+			return out, nil
+		})
+}

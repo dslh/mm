@@ -56,6 +56,8 @@ func run(args []string) int {
 		err = cmdReorder(ctx, cmdArgs)
 	case "slots":
 		err = cmdSlots(ctx, cmdArgs)
+	case "mcp":
+		err = cmdMCP(ctx, cmdArgs)
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -176,6 +178,8 @@ func usage() {
   mm reorder <id> [--dry-run]      add a past order's lines to the cart
 
   mm slots                         available delivery windows (selection stays in the browser)
+
+  mm mcp                           run the MCP server over stdio (tools for Claude)
 
 flags: --json   machine-readable output
 env:   MM_STATE auth state path (default .auth/state.json)

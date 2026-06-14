@@ -54,14 +54,20 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
 - [x] Order history + reorder path mapped (`/orders/past` → `/orders/{id}`)
 - [x] Decide CLI vs MCP server → **CLI first, MCP wrapper later** (rationale in `docs/design.md`)
 - [x] Implement client — v1 CLI (`mm`) working end-to-end, verified live 2026-06-11
-- [ ] MCP server as a thin wrapper over `internal/ops`
+- [x] MCP server (`mm mcp`) — thin stdio wrapper over `internal/ops`, verified 2026-06-14
 
 ## Code
 
 Go module `github.com/dslh/mm` (private repo, this working tree). Layout per
 `docs/design.md`: `internal/api` (typed client: pacing, session state, error taxonomy),
-`internal/ops` (smart operations: resolve/clamp/batch/reorder), `cmd/mm` (CLI).
-Build: `go build -o bin/mm ./cmd/mm`. Run `mm help` for the command surface.
+`internal/ops` (smart operations: resolve/clamp/batch/reorder), `cmd/mm` (CLI + the
+`mm mcp` stdio server in `mcp.go`). Build: `go build -o bin/mm ./cmd/mm`. Run `mm help`
+for the command surface.
+
+Register the MCP server with a client over stdio, e.g.
+`claude mcp add mm -- /abs/path/to/bin/mm mcp` (the server reads `.auth/state.json` from
+its working directory, or `$MM_STATE`). Tools mirror the CLI; cart mutation goes through
+the single `cart_apply` tool. See `docs/design.md` "MCP server".
 
 ## Notes on driving the API
 

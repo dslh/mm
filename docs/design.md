@@ -140,9 +140,42 @@ Europe/Paris local time.
 - **No favorites/recipes endpoints** yet (`/account/bookmarks*`, `/cart/recipes`) — easy
   adds later if wanted.
 
-## MCP mapping (later)
+## MCP server
 
-Thin server over `internal/ops` via the official Go SDK; roughly one tool per command:
-`search`, `browse`, `get_product`, `get_cart`, `cart_apply` (the workhorse — covers
-add/set/remove/batch), `list_orders`, `get_order`, `reorder`, `list_slots`,
-`auth_status`. Tool results reuse the `--json` output shapes.
+`mm mcp` runs a stdio server (official Go SDK, `github.com/modelcontextprotocol/go-sdk`)
+exposing `internal/ops` to Claude — `cmd/mm/mcp.go`, a thin wrapper, no new logic. Ten
+tools, one per command:
+
+| Tool | Wraps | Input |
+|---|---|---|
+| `search` | `Search`/`SearchAll` | `query`, `all?` |
+| `browse` | `Navigation` (no slug) / `Category` | `slug?` |
+| `get_product` | `ArticleBySlug` | `slug` |
+| `get_cart` | `GetCart` | — |
+| `cart_apply` | `Apply` (the workhorse — add/set/remove/batch) | `lines[]` of `{query\|id, n\|set}` |
+| `list_orders` | `OrdersPast` | `limit?` |
+| `get_order` | `Order` | `id` |
+| `reorder` | `Reorder` | `id`, `dryRun?` |
+| `list_slots` | `Slots` | — |
+| `auth_status` | `ProbeAuth` + expiry | — |
+
+`cart_apply` is the only cart-mutation tool (no separate add/set tools — the design's
+"one workhorse" choice). Scope still ends at the cart: no checkout/payment tool exists.
+
+Implementation notes:
+
+- **Output = the `--json` shapes, byte-for-byte.** Handlers return the same view-shaped
+  values the CLI marshals (`viewCart` strips the cart's delivery PII; `api.Order`/`api.Cart`
+  structs already omit it). Tools register with `AddTool[In, any]`: the SDK infers and
+  validates the *input* schema from the typed args but generates no output schema (skipped
+  when `Out == any`), so the deliberately drift-tolerant response structs aren't subject to
+  strict output validation. The returned value is mirrored into both `structuredContent`
+  and a text block.
+- **One shared client, fully serialized.** A single `api.Client` lives for the server's
+  lifetime and every handler runs under one mutex, so all traffic stays human-paced (ToS)
+  and the un-synchronized session state is never touched concurrently. Session expiry rolls
+  forward in memory from `Set-Cookie` and is written back on shutdown.
+- **Errors** map the library taxonomy to tool errors (`isError` + message) so the agent can
+  self-correct: auth → "recreate `.auth/state.json`"; drift → "re-verify per docs/api.md".
+  `auth_status` is the exception — an expired session returns `valid:false` rather than
+  erroring, since reporting that is its job.
