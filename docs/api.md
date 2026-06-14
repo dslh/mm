@@ -335,8 +335,9 @@ Request body is the delivery target — read it from the cart's `delivery.addres
 `delivery.address.addressComponents.{postalCode,countryCode}` (verified 2026-06-11; the
 address object is `{ addressComponents, formattedAddress, location, locationInfo }`):
 ```json
-{ "location": { "lat": 48.8017, "lng": 2.2772 }, "postalCode": "92320", "countryCode": "FR" }
+{ "location": { "lat": <lat>, "lng": <lng> }, "postalCode": "<postal>", "countryCode": "FR" }
 ```
+(real lat/lng/postal omitted — they're customer location data; read them from the live cart)
 Response: `{ "deliveryZones": [ ... ] }`. Each zone:
 ```jsonc
 {
@@ -366,21 +367,42 @@ This endpoint is the answer to "show me available delivery windows." Filter to
 `!isFull && !isExpired && !isExcluded`. Times are epoch-ms; `orderUntil` is the cutoff to
 order for that window.
 
-### Selecting a window — partially mapped (⚠ verify before relying on it)
+### Selecting a window — `PATCH /api/cart/delivery2`
 
-Picking a slot fires **`PATCH /api/cart/initialOrder`**, but the capture on 2026-06-11 was
-taken while the account had an **in-progress order** (a placed order still open for
-additions — the cart shows the slot as "Commande en cours" and you can add items until
-`orderUntil`). In that mode the cart *binds to the existing order* and the request body was
-`{ "orderId": "<existingOrderId>" }` — **not** a `timeSlotId` — and a companion
-`POST /api/orders/taskDeliveryInfos` with `{ "orderIds": [...] }` fetches delivery info for
-those orders. So what we captured is the "attach to in-progress order" path, **not** the
-clean "choose a fresh slot for a new cart" contract (which presumably sends a slot `id`).
+Verified 2026-06-14 from a clean cart (empty, no in-progress order). Picking a slot in the
+"Choisissez votre créneau" dialog fires **`PATCH /api/cart/delivery2`**, returning `200` +
+the full cart. Request body:
 
-That clean contract was deliberately **not** captured: changing the slot while a real order
-is in progress would alter that order's delivery time (outward-facing, hard to reverse), so
-it needs either a fresh-cart state or Doug's explicit OK to change-and-restore. **TODO:
-re-capture slot selection from a clean cart.**
+```jsonc
+{
+  "delivery": {
+    "note": "<delivery instructions — PII, see below>",
+    "address": { /* the cart's delivery.address object, verbatim */ }
+  },
+  "timeSlot": { /* one full slot object from deliverySlots2, verbatim (keyed by id) */ }
+}
+```
+
+Two things matter for replaying it:
+- **`timeSlot` is the whole slot object, not just an id.** Send the slot exactly as
+  `deliverySlots2` returned it (`id`, `from`/`to`/`orderUntil`, `daysLimit`, `rate`,
+  `deliveryPricesWithDeltas`, `activeDeliveryPrice`, the `is*` flags, …). A bare
+  `{ "id": ... }` / `timeSlotId` was **not** what the SPA sends.
+- **`delivery` is only `{ note, address }`** — *not* the cart's entire `delivery` block
+  (which also holds `timeSlot`, `deliveryZone`, `deliveryPrices`, `mode`, …). The address
+  is the cart's `delivery.address` verbatim. **Omitting `note` would drop the saved access
+  instructions**, so a client must echo it back; verified the note + address survive the
+  round-trip.
+
+> **PII:** the `delivery` block contains the customer's home address and the access note
+> (building/door/interphone codes). The `mm` client passes both through as **opaque bytes**
+> (`Cart.RawDelivery` → `SetCartDelivery`) — never decoding, logging, or persisting them.
+> Keep these values out of this doc and any capture artifact.
+
+This is distinct from the **in-progress-order** path (`PATCH /api/cart/initialOrder` with
+`{ "orderId": ... }`, plus `POST /api/orders/taskDeliveryInfos`), which *attaches the cart
+to an already-placed order still open for additions* — not relevant to choosing a window
+for a fresh cart, and not used by the client.
 
 ## Telemetry to ignore
 

@@ -1,6 +1,9 @@
 package api
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // All prices are cents, occasionally fractional — always float64 (docs/api.md).
 // Epoch timestamps are milliseconds.
@@ -138,6 +141,31 @@ type Cart struct {
 	Price                 CartPrice     `json:"price"`
 	MinOrderAmountReached bool          `json:"minOrderAmountReached"`
 	Delivery              CartDelivery  `json:"delivery"`
+
+	// RawDelivery is the verbatim `delivery` JSON object. It holds the customer's
+	// delivery PII (access note, full address) as opaque bytes that are *never*
+	// decoded into named fields here, so the note/address values never enter a Go
+	// string that could be logged or printed. Its sole use is replaying the
+	// {note,address} into PATCH /cart/delivery2 (slot selection). `json:"-"` keeps
+	// it out of any re-marshal (e.g. --json output); it lives only in memory.
+	RawDelivery json.RawMessage `json:"-"`
+}
+
+func (c *Cart) UnmarshalJSON(b []byte) error {
+	type alias Cart // shed the custom method to avoid infinite recursion
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*c = Cart(a)
+	var probe struct {
+		Delivery json.RawMessage `json:"delivery"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return err
+	}
+	c.RawDelivery = probe.Delivery
+	return nil
 }
 
 type CartDelivery struct {
@@ -284,6 +312,23 @@ type DeliverySlot struct {
 		Currency string  `json:"currency"`
 		DutyFree float64 `json:"dutyFree"`
 	} `json:"extraPrice"`
+
+	// Raw is the verbatim slot JSON, replayed into PATCH /cart/delivery2 so the
+	// selection request carries every field the server sent (daysLimit, rate,
+	// deliveryPricesWithDeltas, …), not just the subset modeled above. Not PII;
+	// `json:"-"` only because it would duplicate the typed fields in --json output.
+	Raw json.RawMessage `json:"-"`
+}
+
+func (s *DeliverySlot) UnmarshalJSON(b []byte) error {
+	type alias DeliverySlot
+	var a alias
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	*s = DeliverySlot(a)
+	s.Raw = append(json.RawMessage(nil), b...)
+	return nil
 }
 
 func (s *DeliverySlot) Selectable() bool { return !s.IsFull && !s.IsExpired && !s.IsExcluded }

@@ -48,7 +48,8 @@ mm orders [--limit N]           past order summaries
 mm order <id>                   order detail (canonicalId + quantities)
 mm reorder <id> [--dry-run]     rebuild cart from a past order, with fallback report
 
-mm slots                        selectable delivery windows (list only — see scope cuts)
+mm slots                        selectable delivery windows
+mm slots select <slotId>        set the cart's delivery window (checkout stays manual)
 ```
 
 Global flag `--json` switches output from compact human text to structured JSON.
@@ -125,25 +126,41 @@ inherit this automatically.
 ### PII
 
 Per api.md, `/cart` and `/orders/{id}` carry name/email/phone/address. The response
-structs **do not include those fields** except `delivery.address.location` +
-`postalCode`, which `mm slots` needs as the `deliverySlots2` request body; renderers
-never print them. Money renders as `4,24 €` from integer cents; slot times render in
-Europe/Paris local time.
+structs **do not decode those fields** except `delivery.address.location` + `postalCode` +
+`countryCode`, which `mm slots` needs as the `deliverySlots2` request body; renderers never
+print them. Money renders as `4,24 €` from integer cents; slot times render in Europe/Paris
+local time.
+
+**Slot selection pass-through.** `PATCH /cart/delivery2` (slot selection) is the one flow
+that must *send* PII back — it re-posts the cart's `delivery.{note,address}` alongside the
+chosen slot. The rule is **opaque pass-through, never inspection**:
+
+- `Cart.RawDelivery` (a `json.RawMessage`, tag `json:"-"`) captures the `delivery` object
+  verbatim on `GET /cart`. The note/address values are never unmarshaled into Go strings,
+  so they can't reach a log line or `fmt` call. `SetCartDelivery` sub-selects the
+  `{note,address}` keys as raw bytes and posts them straight back.
+- The raw bytes live **in memory only** — never written to disk (the session file holds
+  just the cookie), never emitted by `--json` (the `json:"-"` tag + the `viewCart` shape
+  both exclude it).
+- `DriftError` snippets are **suppressed for PII endpoints** (`/cart`, `/orders/{id}`,
+  `/cart/delivery2` — `reqOpts.sensitive`): on a decode/HTTP failure the error reports the
+  body's size, not its content, so personal data never lands in stderr.
+
+This loops the customer's own data back into the same system it came from, with no new
+on-disk or logged copy — the agreed handling (2026-06-14).
 
 ## Scope cuts (v1)
 
-- **No slot selection.** Only the attach-to-existing-order variant of
-  `PATCH /cart/initialOrder` was captured (api.md "Selecting a window"); the clean
-  contract is unverified. `mm slots` lists windows; Doug picks in the browser —
-  consistent with checkout being manual anyway.
-- **No checkout/payment anything**, per CLAUDE.md. Scope ends at the cart.
+- **No checkout/payment anything**, per CLAUDE.md. Scope ends at the cart: `mm slots
+  select` sets the delivery window, but final review, checkout, and payment stay in the
+  browser.
 - **No favorites/recipes endpoints** yet (`/account/bookmarks*`, `/cart/recipes`) — easy
   adds later if wanted.
 
 ## MCP server
 
 `mm mcp` runs a stdio server (official Go SDK, `github.com/modelcontextprotocol/go-sdk`)
-exposing `internal/ops` to Claude — `cmd/mm/mcp.go`, a thin wrapper, no new logic. Ten
+exposing `internal/ops` to Claude — `cmd/mm/mcp.go`, a thin wrapper, no new logic. Eleven
 tools, one per command:
 
 | Tool | Wraps | Input |
@@ -157,6 +174,7 @@ tools, one per command:
 | `get_order` | `Order` | `id` |
 | `reorder` | `Reorder` | `id`, `dryRun?` |
 | `list_slots` | `Slots` | — |
+| `select_slot` | `SelectSlot` | `slotId` |
 | `auth_status` | `ProbeAuth` + expiry | — |
 
 `cart_apply` is the only cart-mutation tool (no separate add/set tools — the design's

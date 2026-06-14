@@ -122,6 +122,10 @@ type orderArgs struct {
 	ID string `json:"id" jsonschema:"order id from list_orders"`
 }
 
+type selectSlotArgs struct {
+	SlotID string `json:"slotId" jsonschema:"delivery slot id from list_slots"`
+}
+
 type reorderArgs struct {
 	ID     string `json:"id" jsonschema:"past order id to rebuild into the cart"`
 	DryRun bool   `json:"dryRun,omitempty" jsonschema:"plan only: report the lines and availability without changing the cart"`
@@ -222,9 +226,19 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 		})
 
 	mcpTool(s, "list_slots",
-		"List available delivery windows for the cart's delivery address (window times, order-by deadlines, any surcharge). Selecting a slot is not automated — Doug picks it in the browser.",
+		"List available delivery windows for the cart's delivery address (slot id, window times, order-by deadlines, any surcharge). Use a slot id with select_slot.",
 		func(ctx context.Context, _ struct{}) (any, error) {
 			return o.Slots(ctx)
+		})
+
+	mcpTool(s, "select_slot",
+		"Set the cart's delivery window to the given slot id (from list_slots), reusing the cart's existing delivery address. Refuses slots that are full, expired, or excluded. Returns the chosen window and the updated cart. Final review, checkout, and payment stay in the browser.",
+		func(ctx context.Context, in selectSlotArgs) (any, error) {
+			cart, slot, err := o.SelectSlot(ctx, in.SlotID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]any{"selected": slot, "cart": viewCart(cart)}, nil
 		})
 
 	mcpTool(s, "auth_status",

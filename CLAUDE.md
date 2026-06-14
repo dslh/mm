@@ -55,6 +55,9 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
 - [x] Decide CLI vs MCP server → **CLI first, MCP wrapper later** (rationale in `docs/design.md`)
 - [x] Implement client — v1 CLI (`mm`) working end-to-end, verified live 2026-06-11
 - [x] MCP server (`mm mcp`) — thin stdio wrapper over `internal/ops`, verified 2026-06-14
+- [x] Delivery-slot selection (`PATCH /cart/delivery2`) — mapped + implemented
+      (`mm slots select`, MCP `select_slot`), verified live 2026-06-14. Delivery PII is
+      passed through as opaque bytes, never decoded/logged/stored (see `docs/design.md` PII).
 
 ## Code
 

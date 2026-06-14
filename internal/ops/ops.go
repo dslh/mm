@@ -286,6 +286,54 @@ func (o *Ops) Slots(ctx context.Context) (*api.DeliverySlotsResponse, error) {
 	return o.API.DeliverySlots(ctx, addr.Location, addr.AddressComponents.PostalCode, addr.AddressComponents.CountryCode)
 }
 
+// SelectSlot sets the cart's delivery window to the slot with the given id,
+// reusing the cart's existing delivery address (the only address we have). It
+// looks the id up in the live slot list, refuses anything not currently
+// selectable, then replays the cart's delivery {note,address} + the chosen slot
+// into PATCH /cart/delivery2. The delivery PII is passed through as opaque bytes
+// (see api.SetCartDelivery) — never decoded, logged, or stored. Returns the
+// updated cart and the chosen slot (both PII-free) for confirmation.
+func (o *Ops) SelectSlot(ctx context.Context, slotID string) (*api.Cart, *api.DeliverySlot, error) {
+	if slotID == "" {
+		return nil, nil, fmt.Errorf("empty slot id")
+	}
+	cart, err := o.GetCart(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(cart.RawDelivery) == 0 || cart.Delivery.Address.AddressComponents.PostalCode == "" {
+		return nil, nil, fmt.Errorf("cart has no delivery address; set one in the browser first")
+	}
+	addr := cart.Delivery.Address
+	slots, err := o.API.DeliverySlots(ctx, addr.Location, addr.AddressComponents.PostalCode, addr.AddressComponents.CountryCode)
+	if err != nil {
+		return nil, nil, err
+	}
+	var chosen *api.DeliverySlot
+	for zi := range slots.DeliveryZones {
+		for si := range slots.DeliveryZones[zi].DeliverySlots {
+			if s := &slots.DeliveryZones[zi].DeliverySlots[si]; s.ID == slotID {
+				chosen = s
+				break
+			}
+		}
+		if chosen != nil {
+			break
+		}
+	}
+	if chosen == nil {
+		return nil, nil, fmt.Errorf("slot %q not among current windows — run `mm slots` for valid ids", slotID)
+	}
+	if !chosen.Selectable() {
+		return nil, nil, fmt.Errorf("slot %q is not selectable (full, expired, or excluded) — run `mm slots`", slotID)
+	}
+	updated, err := o.API.SetCartDelivery(ctx, cart.RawDelivery, chosen.Raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	return updated, chosen, nil
+}
+
 // ParseApplyLines reads JSON lines ({"query":"tomate","n":2} / {"id":"…","set":0}),
 // or a single JSON array of the same objects. Blank lines and #-comments are skipped.
 func ParseApplyLines(r io.Reader) ([]ApplyLine, error) {

@@ -103,7 +103,19 @@ func (e *DriftError) Error() string {
 	return b.String()
 }
 
+// reqOpts tunes a single request. `sensitive` marks an endpoint whose response
+// body carries PII (cart, order detail, delivery2): on a decode/HTTP failure the
+// raw body is withheld from the DriftError snippet so personal data never lands
+// in an error string, log line, or stderr — only its size is reported.
+type reqOpts struct {
+	sensitive bool
+}
+
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
+	return c.doOpts(ctx, method, path, query, body, out, reqOpts{})
+}
+
+func (c *Client) doOpts(ctx context.Context, method, path string, query url.Values, body, out any, opts reqOpts) error {
 	c.pace()
 	u := baseURL + path
 	if len(query) > 0 {
@@ -143,7 +155,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 			return nil
 		}
 		if err := json.Unmarshal(raw, out); err != nil {
-			return &DriftError{Status: resp.StatusCode, Snippet: snippet(raw), Cause: err}
+			return &DriftError{Status: resp.StatusCode, Snippet: snippet(raw, opts.sensitive), Cause: err}
 		}
 		return nil
 	}
@@ -155,10 +167,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if json.Unmarshal(raw, &eb) == nil && eb.Code != "" {
 		return &APIError{Status: resp.StatusCode, Code: eb.Code, Message: eb.Message}
 	}
-	return &DriftError{Status: resp.StatusCode, Snippet: snippet(raw)}
+	return &DriftError{Status: resp.StatusCode, Snippet: snippet(raw, opts.sensitive)}
 }
 
-func snippet(b []byte) string {
+func snippet(b []byte, sensitive bool) string {
+	if sensitive {
+		// Never echo a PII-bearing body; report only its size for drift triage.
+		return fmt.Sprintf("<%d bytes withheld (may contain personal data)>", len(b))
+	}
 	s := strings.Join(strings.Fields(string(b)), " ")
 	if len(s) > 300 {
 		s = s[:300] + "…"

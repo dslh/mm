@@ -177,7 +177,8 @@ func usage() {
   mm order <id>                    one order, with quantities
   mm reorder <id> [--dry-run]      add a past order's lines to the cart
 
-  mm slots                         available delivery windows (selection stays in the browser)
+  mm slots                         available delivery windows
+  mm slots select <slotId>         set the cart's delivery window (checkout stays in the browser)
 
   mm mcp                           run the MCP server over stdio (tools for Claude)
 

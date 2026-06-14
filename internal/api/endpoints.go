@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 )
@@ -74,7 +75,7 @@ func (c *Client) ArticleBySlug(ctx context.Context, slug string) (*ArticleDetail
 
 func (c *Client) Cart(ctx context.Context) (*Cart, error) {
 	var out Cart
-	if err := c.do(ctx, "GET", "/cart", nil, nil, &out); err != nil {
+	if err := c.doOpts(ctx, "GET", "/cart", nil, nil, &out, reqOpts{sensitive: true}); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -91,7 +92,41 @@ func (c *Client) SetCartProduct(ctx context.Context, canonicalID string, quantit
 	}
 	body := map[string]any{"product": map[string]any{"id": canonicalID, "quantity": quantity}}
 	var out Cart
-	if err := c.do(ctx, "PATCH", "/cart/product", nil, body, &out); err != nil {
+	if err := c.doOpts(ctx, "PATCH", "/cart/product", nil, body, &out, reqOpts{sensitive: true}); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// SetCartDelivery selects a delivery window by re-sending the cart's existing
+// delivery {note, address} alongside the chosen slot, per the verified
+// PATCH /cart/delivery2 contract (docs/api.md "Selecting a window").
+//
+// rawDelivery is the cart's verbatim `delivery` object (Cart.RawDelivery) and
+// rawSlot is the verbatim slot object (DeliverySlot.Raw). Both flow through as
+// opaque json.RawMessage: the PII inside `note`/`address` is moved, never
+// decoded into a Go string, so it cannot be logged. We send only the {note,
+// address} subset the SPA sends — passing the whole cart delivery block (which
+// also holds timeSlot, deliveryZone, …) is not the observed contract.
+func (c *Client) SetCartDelivery(ctx context.Context, rawDelivery, rawSlot json.RawMessage) (*Cart, error) {
+	if len(rawSlot) == 0 {
+		return nil, fmt.Errorf("empty delivery slot")
+	}
+	var deliv map[string]json.RawMessage
+	if err := json.Unmarshal(rawDelivery, &deliv); err != nil {
+		return nil, fmt.Errorf("parsing cart delivery block: %w", err)
+	}
+	addr, ok := deliv["address"]
+	if !ok || len(addr) == 0 {
+		return nil, fmt.Errorf("cart delivery block has no address")
+	}
+	payload := map[string]json.RawMessage{"address": addr}
+	if note, ok := deliv["note"]; ok {
+		payload["note"] = note // preserve access instructions verbatim; never inspected
+	}
+	body := map[string]any{"delivery": payload, "timeSlot": rawSlot}
+	var out Cart
+	if err := c.doOpts(ctx, "PATCH", "/cart/delivery2", nil, body, &out, reqOpts{sensitive: true}); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -107,7 +142,7 @@ func (c *Client) OrdersPast(ctx context.Context) (*OrdersPast, error) {
 
 func (c *Client) Order(ctx context.Context, id string) (*Order, error) {
 	var out Order
-	if err := c.do(ctx, "GET", "/orders/"+url.PathEscape(id), nil, nil, &out); err != nil {
+	if err := c.doOpts(ctx, "GET", "/orders/"+url.PathEscape(id), nil, nil, &out, reqOpts{sensitive: true}); err != nil {
 		return nil, err
 	}
 	return &out, nil
