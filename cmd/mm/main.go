@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,17 @@ func run(args []string) int {
 		usage()
 		return 2
 	}
+
+	// Help requests resolve against the help tree (see help.go), as either the
+	// `help` command or a -h/--help flag anywhere in the args. Help is requested
+	// output: it goes to stdout and exits 0.
+	if rest[0] == "help" {
+		return printHelp(rest[1:])
+	}
+	if words, ok := stripHelpFlag(rest); ok {
+		return printHelp(words)
+	}
+
 	cmd, cmdArgs := rest[0], rest[1:]
 	ctx := context.Background()
 
@@ -58,9 +70,6 @@ func run(args []string) int {
 		err = cmdSlots(ctx, cmdArgs)
 	case "mcp":
 		err = cmdMCP(ctx, cmdArgs)
-	case "help", "-h", "--help":
-		usage()
-		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage()
@@ -158,8 +167,12 @@ func flagInt(args []string, name string, def int) (int, []string, error) {
 	return val, rest, nil
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `mm — mon-marché shopping assistant (cart only; checkout stays in the browser)
+// usage prints the command overview to stderr (the error path: bad/missing args).
+// Explicit help requests use usageTo(os.Stdout) instead — see printHelp.
+func usage() { usageTo(os.Stderr) }
+
+func usageTo(w io.Writer) {
+	fmt.Fprint(w, `mm — mon-marché shopping assistant (cart only; checkout stays in the browser)
 
   mm auth status                   session validity and expiry
   mm auth login                    how to (re-)create the session (manual browser login)
@@ -184,5 +197,6 @@ func usage() {
 
 flags: --json   machine-readable output
 env:   MM_STATE auth state path (default .auth/state.json)
+help:  mm help <command> [subcommand]  or  mm <command> --help   for detail
 `)
 }
