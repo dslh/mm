@@ -160,7 +160,7 @@ type applyArgs struct {
 
 func registerTools(s *mcp.Server, o *ops.Ops) {
 	mcpTool(s, "search",
-		"Search the catalog by free text — use when you know roughly what you want by name (e.g. 'tomate cerise'). Returns matching products (canonicalId, name, slug, price in euro cents, stock). Use a product's canonicalId with cart_apply to add it.",
+		"Search the catalog by free text — use when you know roughly what you want by name (e.g. 'tomate cerise'). Returns matching products (canonicalId, name, slug, price in euro cents, stock, plus any tags in attributes[] under key 'specific-tag' such as BIO/Nouveau/Sans nitrite, and promo). Use a product's canonicalId with cart_apply to add it.",
 		func(ctx context.Context, in searchArgs) (any, error) {
 			if in.All {
 				return o.API.SearchAll(ctx, in.Query, maxSearchPages)

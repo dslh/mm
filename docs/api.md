@@ -141,6 +141,32 @@ Weights are in the unit named alongside them (usually kg).
 }
 ```
 
+### Product tags / badges (`attributes`, `labels`, `promo`)
+
+The small badges the site shows on product cards come from three places:
+
+- **`attributes[]`** — array of `{ id, key, label, value, valueUnit }`. In the
+  **search/category feed** this is a short list (typically just `origin` and an
+  editorial tag); in **`/articleDetailBySlug`** it's the full PIM matrix
+  (allergens, nutrition, ingredients, legal name, conservation, …). The colored
+  "pill" badge is the entry with **`key: "specific-tag"`**; its `value` is the
+  display text — seen so far: `"Sans nitrite"`, `"Nouveau"`, `"BIO"`.
+  ⚠ `value` is **not always a string**: nutrition rows in the detail payload send
+  it as a *number* (`"value": 20`). Decode `value` permissively (the `mm` client
+  coerces number→string in `Attribute.UnmarshalJSON`).
+- **`labels[]`** — official certification logos: `{ id, label, images[] }` with
+  `label` ∈ `"Label BIO AB"`, `"Label BIO UE"`, `"Label Rouge"`,
+  `"Indication Géographique Protégée (IGP)"`, … (the badge image is in `images`).
+  Overlaps with the `specific-tag` pill for BIO items. `mm` does **not** render
+  these (decision 2026-06-14: kept output compact; `specific-tag` covers it).
+- **`promo.mechanism`** — `"IMMEDIATE_DISCOUNT"` (a flat `-X%` or `-X €`, with
+  `conditions.type` `PERCENT`/`VALUE`) or **`"BATCH_DISCOUNT"`** = "le Nème à
+  -X%" (`conditions.nthQuantity: 2`, `value: 50`, `type: PERCENT` → *le 2ème à
+  -50%*). `mm` renders this as `[2ème à -50%]`.
+
+`mm` surfaces the `specific-tag` pill and the promo in product lines / `mm
+product` (e.g. `[Sans nitrite]  [2ème à -50%]`). Verified live 2026-06-14.
+
 ## Browse by category
 
 Browsing is server-rendered on the site (no XHR fires on a category page load), but the

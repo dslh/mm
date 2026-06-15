@@ -47,6 +47,9 @@ func productLine(p *api.Product) string {
 	price := euro(p.ItemPrice) + p.PriceUnit()
 	line := fmt.Sprintf("  %-12s %-48s %14s  stock %-4d slug:%s",
 		p.CanonicalID, trunc(p.Name, 48), price, p.AvailableQuantity, p.Slug)
+	if t := p.SpecificTag(); t != "" {
+		line += "  [" + t + "]"
+	}
 	if p.Promo != nil {
 		line += "  " + promoTag(p.Promo)
 	}
@@ -54,6 +57,11 @@ func productLine(p *api.Product) string {
 }
 
 func promoTag(pr *api.Promo) string {
+	// BATCH_DISCOUNT = "le Nème à -X%" (buy several, the Nth is discounted).
+	if pr.Mechanism == "BATCH_DISCOUNT" && pr.Conditions.NthQuantity > 0 &&
+		pr.Conditions.Type == "PERCENT" && pr.Conditions.Value > 0 {
+		return fmt.Sprintf("[%s à -%g%%]", ordinalFr(pr.Conditions.NthQuantity), pr.Conditions.Value)
+	}
 	if pr.Conditions.Type == "PERCENT" && pr.Conditions.Value > 0 {
 		return fmt.Sprintf("[promo -%g%%]", pr.Conditions.Value)
 	}
@@ -61,6 +69,14 @@ func promoTag(pr *api.Promo) string {
 		return fmt.Sprintf("[promo, was %s]", euro(pr.ItemOriginalPrice))
 	}
 	return "[promo]"
+}
+
+// ordinalFr renders a French ordinal as mon-marché labels them ("1er", "2ème").
+func ordinalFr(n int) string {
+	if n == 1 {
+		return "1er"
+	}
+	return fmt.Sprintf("%dème", n)
 }
 
 func slotLabel(ts *api.OrderTimeSlot) string {

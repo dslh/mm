@@ -132,6 +132,9 @@ func cmdProduct(ctx context.Context, args []string) error {
 		fmt.Printf("  origin: %s", d.Origin)
 	}
 	fmt.Println()
+	if t := d.SpecificTag(); t != "" {
+		fmt.Println("tag:", t)
+	}
 	if d.Promo != nil {
 		fmt.Println("promo:", promoTag(d.Promo))
 	}

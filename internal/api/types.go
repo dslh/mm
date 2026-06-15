@@ -46,8 +46,56 @@ type Product struct {
 			} `json:"perWeightUnit"`
 		} `json:"sellPrices"`
 	} `json:"pricing"`
-	Promo            *Promo `json:"promo"`
-	ShortDescription string `json:"shortDescription"`
+	Promo            *Promo      `json:"promo"`
+	ShortDescription string      `json:"shortDescription"`
+	Attributes       []Attribute `json:"attributes"`
+}
+
+// Attribute is one entry of the product's `attributes[]` array. In the
+// search/category feed this is a short list (origin + an editorial tag); in
+// /articleDetailBySlug it's the full PIM matrix (allergens, nutrition,
+// ingredients, …). We decode it generically and pick fields out by key.
+type Attribute struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// UnmarshalJSON coerces `value` to a string. The detail endpoint sends numeric
+// values for nutrition rows (e.g. `"value": 20`) while the feed sends strings
+// (e.g. `"value": "Sans nitrite"`); decode either without erroring.
+func (a *Attribute) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Key   string          `json:"key"`
+		Label string          `json:"label"`
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	a.Key, a.Label = raw.Key, raw.Label
+	v := string(raw.Value)
+	if len(v) > 0 && v[0] == '"' {
+		if err := json.Unmarshal(raw.Value, &a.Value); err != nil {
+			return err
+		}
+	} else if v != "null" {
+		a.Value = v // number/bool — keep its literal text
+	}
+	return nil
+}
+
+// SpecificTag returns the editorial "specific-tag" badge value — the small
+// pill mon-marché shows on product cards (e.g. "Sans nitrite", "Nouveau",
+// "BIO") — or "" when the product has none. Lives in attributes[] under
+// key "specific-tag".
+func (p *Product) SpecificTag() string {
+	for _, a := range p.Attributes {
+		if a.Key == "specific-tag" {
+			return a.Value
+		}
+	}
+	return ""
 }
 
 // PriceUnit is the denominator of the display price ("/kg", "/pièce").
@@ -68,8 +116,9 @@ type Promo struct {
 	Mechanism         string  `json:"mechanism"`
 	ItemOriginalPrice float64 `json:"itemOriginalPrice"`
 	Conditions        struct {
-		Type  string  `json:"type"` // e.g. PERCENT
-		Value float64 `json:"value"`
+		Type        string  `json:"type"`  // PERCENT | VALUE
+		Value       float64 `json:"value"` // percent points, or cents off, per Type
+		NthQuantity int     `json:"nthQuantity"`
 	} `json:"conditions"`
 }
 
