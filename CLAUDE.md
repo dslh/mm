@@ -6,8 +6,8 @@ online grocery service (fresh produce, Paris/Île-de-France delivery, operated b
 ## Goal
 
 Build a CLI and/or MCP server that lets Claude browse the mon-marché catalog and manage
-the shopping cart under Doug's own customer login. Scope ends at the cart: **final review,
-checkout, and payment are always done by Doug in the browser.** Never place orders or
+the shopping cart under your own customer login. Scope ends at the cart: **final review,
+checkout, and payment are always done by you in the browser.** Never place orders or
 touch payment flows.
 
 ## How it works (intended architecture)
@@ -19,7 +19,7 @@ cart read/add/remove.
 
 Endpoint discovery is done with `playwright-cli` (installed globally): drive the site in
 a headed browser and read the XHR traffic via its `requests` / `request <n>` /
-`response-body <n>` commands. Login is always typed by Doug himself in the headed
+`response-body <n>` commands. Login is always typed by you in the headed
 browser — Claude never handles the password. The authenticated session is persisted with
 `state-save` to `.auth/state.json` (gitignored) and restored with `state-load`.
 
@@ -35,8 +35,8 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
   high" number of transactions → keep request rates human-paced, no aggressive polling.
 - Art. 16 (IP) + French sui generis database right → query the catalog on demand;
   don't bulk-mirror or redistribute it.
-- Art. 4.1: account actions are deemed Doug's; password is confidential → credentials
-  stay local (keychain or untracked `.env`), never committed.
+- Art. 4.1: account actions are deemed the account holder's; password is confidential →
+  credentials stay local (keychain or untracked `.env`), never committed.
 
 ## Conventions
 
@@ -61,7 +61,7 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
 
 ## Code
 
-Go module `github.com/dslh/mm` (private repo, this working tree). Layout per
+Go module `github.com/dslh/mm`. Layout per
 `docs/design.md`: `internal/api` (typed client: pacing, session state, error taxonomy),
 `internal/ops` (smart operations: resolve/clamp/batch/reorder), `cmd/mm` (CLI + the
 `mm mcp` stdio server in `mcp.go`). Build: `go build -o bin/mm ./cmd/mm`. Run `mm help`
