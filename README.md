@@ -1,13 +1,12 @@
 # mm — mon-marché shopping assistant
 
-A CLI and MCP server that lets Claude (and Doug) browse the
-[mon-marché.fr](https://www.mon-marche.fr) catalog and manage a shopping cart under
-Doug's own customer login. mon-marché is a French online grocery (fresh produce,
-Paris/Île-de-France delivery, operated by MMecom SAS).
+A CLI and MCP server for browsing the [mon-marché.fr](https://www.mon-marche.fr) catalog
+and managing a shopping cart from your own customer login. mon-marché is a French online
+grocery (fresh produce, Paris/Île-de-France delivery, operated by MMecom SAS).
 
-**Scope ends at the cart.** Final review, checkout, and payment are always done by Doug
-in the browser — there is no command or tool for them, and the client never handles
-payment details or places orders.
+**Scope ends at the cart.** Final review, checkout, and payment are always done in the
+browser — there is no command or tool for them, and the client never handles payment
+details or places orders.
 
 ## How it works
 
@@ -19,7 +18,7 @@ commands. Endpoint contracts were reverse-engineered from live browser traffic a
 documented in [`docs/api.md`](docs/api.md); the design rationale is in
 [`docs/design.md`](docs/design.md).
 
-Authentication stays manual: Doug types his credentials in a headed browser, and the
+Authentication stays manual: you type your credentials in a headed browser, and the
 session is persisted to `.auth/state.json` (gitignored). `mm` never sees the password.
 
 ## Build
@@ -59,10 +58,10 @@ Monetary amounts are integer euro cents (`424` = 4,24 €). Run `mm help` or
 
 ## MCP server
 
-`mm mcp` runs a stdio MCP server (official Go SDK) exposing the same operations to
-Claude as eleven tools — `search`, `browse`, `get_product`, `get_cart`, `cart_apply`,
-`list_orders`, `get_order`, `reorder`, `list_slots`, `select_slot`, `auth_status`.
-`cart_apply` is the only cart-mutation tool; there is no checkout/payment tool.
+`mm mcp` runs a stdio MCP server (official Go SDK) exposing the same operations as eleven
+tools — `search`, `browse`, `get_product`, `get_cart`, `cart_apply`, `list_orders`,
+`get_order`, `reorder`, `list_slots`, `select_slot`, `auth_status`. `cart_apply` is the
+only cart-mutation tool; there is no checkout/payment tool.
 
 Register it with a client over stdio:
 
@@ -88,7 +87,7 @@ docs/            api.md (endpoint contracts) and design.md (architecture)
   decoded, stored, or rendered (see `docs/design.md` → PII).
 - All requests are rate-limited to human-like pacing — no aggressive polling, no bulk
   mirroring of the catalog. This keeps within mon-marché's terms of service (reviewed
-  2026-06-11; personal-use automation is permitted — see CLAUDE.md).
+  2026-06-11; personal-use automation is permitted).
 - The private API is undocumented and may change without notice; the client fails loudly
   on unexpected responses rather than guessing.
 
