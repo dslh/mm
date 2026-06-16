@@ -26,6 +26,10 @@ const mcpVersion = "1.0.0"
 const (
 	cardResourceURI = "ui://mm/product-card.html"
 	cardMIME        = "text/html;profile=mcp-app"
+	// cardImageOrigin is the Cloudinary origin product thumbnails load from
+	// (see api.Product.ThumbnailURL); declared in the resource CSP so the host
+	// sandbox permits the images.
+	cardImageOrigin = "https://res.cloudinary.com"
 )
 
 //go:embed product-card.html
@@ -147,6 +151,13 @@ func registerCardResource(s *mcp.Server) {
 			URI:      cardResourceURI,
 			MIMEType: cardMIME,
 			Text:     productCardHTML,
+			// The sandbox CSP is deny-by-default, so the card's product
+			// thumbnails (Cloudinary) are blocked unless their origin is
+			// declared here. resourceDomains maps to img-src (per SEP-1865);
+			// it's set on the contents object, not the Resource descriptor.
+			Meta: mcp.Meta{"ui": map[string]any{
+				"csp": map[string]any{"resourceDomains": []string{cardImageOrigin}},
+			}},
 		}}}, nil
 	})
 }
