@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mon-marché — produits</title>
+<style>
+  /* Deny-by-default CSP: inline styles/scripts only, no external network.
+     Everything here is self-contained — no fonts, scripts, or images fetched
+     except product thumbnails (img-src is permitted for Cloudinary). */
+  :root {
+    --bg: #ffffff; --fg: #1d2026; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #1f7a4d; --accent-fg: #ffffff; --pill: #eef6f1; --pill-fg: #1f7a4d;
+    --promo: #fde7e7; --promo-fg: #b42318; --shadow: 0 1px 3px rgba(16,24,40,.08);
+  }
+  /* Dark palette: applied when the host reports a dark theme, and (when the
+     host says nothing) when the OS prefers dark. Host theme wins via [data-theme]. */
+  body[data-theme="dark"] {
+    --bg:#15181d; --fg:#e8eaed; --muted:#9aa1ac; --line:#2a2f37;
+    --pill:#16271f; --pill-fg:#7fd1a3; --promo:#3a1d1d; --promo-fg:#f3a39c; --shadow:none;
+  }
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) {
+      --bg:#15181d; --fg:#e8eaed; --muted:#9aa1ac; --line:#2a2f37;
+      --pill:#16271f; --pill-fg:#7fd1a3; --promo:#3a1d1d; --promo-fg:#f3a39c; --shadow:none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font: 14px/1.45 -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--fg); background: var(--bg); }
+  #status { color: var(--muted); font-size: 13px; padding: 4px 2px 10px; }
+  #status.error { color: var(--promo-fg); }
+  #grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card { border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+    box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+  .thumb { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #fff; border-bottom: 1px solid var(--line); }
+  .thumb.placeholder { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 28px; }
+  .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .name { font-weight: 600; font-size: 14px; line-height: 1.3; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .price { font-weight: 700; font-size: 16px; }
+  .price .unit { font-weight: 400; font-size: 12px; color: var(--muted); }
+  .pills { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pill { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--pill); color: var(--pill-fg); }
+  .pill.promo { background: var(--promo); color: var(--promo-fg); }
+  .note { font-size: 12.5px; font-style: italic; color: var(--fg); background: var(--pill);
+    border-radius: 8px; padding: 6px 8px; }
+  .spacer { flex: 1; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  button.add { flex: 1; border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg); font-weight: 600; font-size: 13px; }
+  button.add:disabled { opacity: .55; cursor: default; }
+  .oos { color: var(--promo-fg); font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="status">Chargement…</div>
+  <div id="grid"></div>
+
+<script>
+// MCP Apps View, hand-rolled (no external deps — the sandbox CSP forbids them).
+// JSON-RPC 2.0 over window.postMessage to the host, per the SEP-1865 protocol
+// (ext-apps src/{message-transport,app,spec.types}.ts). Lifecycle:
+//   1. ui/initialize request  -> host responds with hostContext (theme, styles)
+//   2. ui/notifications/initialized  (host now starts pushing data)
+//   3. ui/notifications/tool-result  -> we render structuredContent
+//   4. ui/notifications/size-changed  -> we report height (or the iframe is 0px → blank)
+//   add-to-cart: tools/call request -> host proxies to the mm server (cart_apply)
+(function () {
+  "use strict";
+  var PROTOCOL_VERSION = "2026-01-26";
+  var parentWin = window.parent;
+  var statusEl = document.getElementById("status");
+  var grid = document.getElementById("grid");
+  var pending = new Map();
+  var nextId = 0;
+  var initialized = false;
+
+  function send(msg) { parentWin.postMessage(msg, "*"); }
+  function notify(method, params) { send({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  function request(method, params, timeoutMs) {
+    var id = ++nextId;
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { pending.delete(id); reject(new Error("timeout: " + method)); }, timeoutMs || 8000);
+      pending.set(id, { resolve: resolve, reject: reject, t: t });
+      send({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    });
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== parentWin) return;            // only trust the host frame
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && (("result" in m) || ("error" in m))) {
+      var p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id); clearTimeout(p.t);
+      if ("error" in m) p.reject(new Error((m.error && m.error.message) || "request failed"));
+      else p.resolve(m.result);
+      return;
+    }
+    if (typeof m.method === "string") handleInbound(m);
+  });
+
+  function handleInbound(m) {
+    switch (m.method) {
+      case "ui/notifications/tool-result":
+        render(m.params && m.params.structuredContent);
+        break;
+      case "ui/notifications/host-context-changed":
+        applyHostContext(m.params && m.params.hostContext);
+        break;
+      case "ui/notifications/tool-input":
+      case "ui/notifications/tool-input-partial":
+      case "ui/notifications/tool-cancelled":
+        break;                                          // not needed for static cards
+      case "ping":
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+        break;
+      case "ui/request-display-mode":
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: { mode: "inline" } });
+        break;
+      default:
+        // Reply to any unknown *request* so a strict host doesn't hang waiting.
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+    }
+  }
+
+  function applyHostContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme === "dark" || ctx.theme === "light") document.body.setAttribute("data-theme", ctx.theme);
+    var vars = ctx.styles && ctx.styles.variables;
+    if (vars) {
+      var map = {
+        "--color-background-primary": "--bg", "--color-text-primary": "--fg",
+        "--color-text-tertiary": "--muted", "--color-border-primary": "--line",
+      };
+      for (var k in map) if (vars[k]) document.documentElement.style.setProperty(map[k], vars[k]);
+    }
+  }
+
+  // Report content height to the host; without this the iframe stays 0px tall
+  // and nothing is visible even though everything else works.
+  var lastH = 0;
+  function reportSize() {
+    var h = Math.ceil(document.documentElement.scrollHeight);
+    if (h && h !== lastH) { lastH = h; notify("ui/notifications/size-changed", { height: h }); }
+  }
+  if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.documentElement);
+  window.addEventListener("load", reportSize);
+
+  function setStatus(msg, isErr) {
+    statusEl.textContent = msg;
+    statusEl.classList.toggle("error", !!isErr);
+    reportSize();
+  }
+
+  function euro(cents) {
+    var c = Math.round(Math.abs(Number(cents) || 0));
+    return (cents < 0 ? "-" : "") + Math.floor(c / 100) + "," + String(c % 100).padStart(2, "0") + " €";
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function addToCart(p, btn) {
+    if (!initialized) { setStatus("Pas encore connecté à l'hôte.", true); return; }
+    var orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Ajout…";
+    request("tools/call", { name: "cart_apply", arguments: { lines: [{ id: p.canonicalId, n: 1 }] } }, 30000)
+      .then(function (res) {
+        if (res && res.isError) throw new Error("le serveur a refusé l'ajout");
+        btn.textContent = "✓ Ajouté";
+        setStatus("Ajouté au panier : " + p.name, false);
+      })
+      .catch(function (e) {
+        btn.disabled = false; btn.textContent = orig;
+        setStatus("Échec de l'ajout : " + (e.message || e), true);
+      });
+  }
+
+  function renderCard(p) {
+    var card = el("div", "card");
+    if (p.thumbnail) {
+      var img = el("img", "thumb");
+      img.src = p.thumbnail; img.alt = p.name || ""; img.loading = "lazy";
+      img.onerror = function () { img.replaceWith(el("div", "thumb placeholder", "🧺")); };
+      card.appendChild(img);
+    } else {
+      card.appendChild(el("div", "thumb placeholder", "🧺"));
+    }
+
+    var body = el("div", "body");
+    body.appendChild(el("div", "name", p.name || p.slug || "Produit"));
+
+    var metaBits = [];
+    if (p.unitWeight) metaBits.push(p.unitWeight);
+    if (p.origin) metaBits.push(p.origin);
+    if (metaBits.length) body.appendChild(el("div", "meta", metaBits.join(" · ")));
+
+    var price = el("div", "price");
+    price.appendChild(document.createTextNode(euro(p.priceCents)));
+    if (p.priceUnit) { var u = el("span", "unit"); u.textContent = " " + p.priceUnit; price.appendChild(u); }
+    body.appendChild(price);
+
+    if (p.tag || p.promo) {
+      var pills = el("div", "pills");
+      if (p.tag) pills.appendChild(el("span", "pill", p.tag));
+      if (p.promo) pills.appendChild(el("span", "pill promo", p.promo));
+      body.appendChild(pills);
+    }
+    if (p.note) body.appendChild(el("div", "note", p.note));
+    body.appendChild(el("div", "spacer"));
+
+    var row = el("div", "row");
+    var oos = !(p.stock > 0);
+    var btn = el("button", "add", oos ? "Indisponible" : "Ajouter au panier");
+    btn.disabled = oos;
+    if (!oos) btn.addEventListener("click", function () { addToCart(p, btn); });
+    row.appendChild(btn);
+    body.appendChild(row);
+    if (oos) body.appendChild(el("div", "oos", "Rupture de stock"));
+
+    card.appendChild(body);
+    return card;
+  }
+
+  function render(data) {
+    var products = (data && data.products) || [];
+    var errors = (data && data.errors) || [];
+    grid.replaceChildren();
+    for (var i = 0; i < products.length; i++) grid.appendChild(renderCard(products[i]));
+
+    if (!products.length && !errors.length) { setStatus("Aucun produit à afficher.", false); return; }
+    var msg = products.length ? products.length + " produit(s)" : "";
+    if (errors.length) {
+      var slugs = errors.map(function (e) { return e.slug; }).join(", ");
+      msg += (msg ? " — " : "") + errors.length + " introuvable(s) : " + slugs;
+    }
+    setStatus(msg, !products.length);
+    reportSize();
+  }
+
+  // Handshake. If the host never answers ui/initialize, the timeout surfaces a
+  // visible message rather than a silent blank frame (the failure we hit before).
+  request("ui/initialize", {
+    appInfo: { name: "mm product cards", version: "1.0.0" },
+    appCapabilities: {},
+    protocolVersion: PROTOCOL_VERSION,
+  }).then(function (result) {
+    if (result && result.hostContext) applyHostContext(result.hostContext);
+    notify("ui/notifications/initialized");
+    initialized = true;
+    setStatus("En attente des produits…", false);
+  }).catch(function (e) {
+    setStatus("Connexion à l'hôte échouée : " + (e.message || e), true);
+  });
+})();
+</script>
+</body>
+</html>

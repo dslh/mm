@@ -104,6 +104,47 @@ func viewCart(c *api.Cart) cartView {
 	return v
 }
 
+// productCardView is the per-product payload the `show` tool emits as
+// structuredContent for the MCP-UI card template (cmd/mm/product-card.html).
+// Prices are euro cents (the template formats them); Note carries the agent's
+// curation reason for this pick. None of these fields are PII.
+type productCardView struct {
+	CanonicalID string  `json:"canonicalId"` // for the card's add-to-cart → cart_apply
+	Slug        string  `json:"slug"`
+	Name        string  `json:"name"`
+	Thumbnail   string  `json:"thumbnail,omitempty"`
+	PriceCents  float64 `json:"priceCents"`
+	PriceUnit   string  `json:"priceUnit,omitempty"` // "/kg", "/pièce"
+	UnitWeight  string  `json:"unitWeight,omitempty"`
+	Origin      string  `json:"origin,omitempty"`
+	Tag         string  `json:"tag,omitempty"`   // the specific-tag pill (BIO, Nouveau, …)
+	Promo       string  `json:"promo,omitempty"` // formatted promo label
+	Stock       int     `json:"stock"`
+	ShortDesc   string  `json:"shortDescription,omitempty"`
+	Note        string  `json:"note,omitempty"` // agent's "why this one" annotation
+}
+
+func productCard(p *api.Product, note string) productCardView {
+	c := productCardView{
+		CanonicalID: p.CanonicalID,
+		Slug:        p.Slug,
+		Name:        p.Name,
+		Thumbnail:   p.ThumbnailURL(320),
+		PriceCents:  p.ItemPrice,
+		PriceUnit:   p.PriceUnit(),
+		UnitWeight:  p.UnitWeight(),
+		Origin:      p.Origin,
+		Tag:         p.SpecificTag(),
+		Stock:       p.AvailableQuantity,
+		ShortDesc:   p.ShortDescription,
+		Note:        note,
+	}
+	if p.Promo != nil {
+		c.Promo = promoTag(p.Promo)
+	}
+	return c
+}
+
 func renderCart(c *api.Cart) {
 	if len(c.Products) == 0 {
 		fmt.Println("Cart is empty.")

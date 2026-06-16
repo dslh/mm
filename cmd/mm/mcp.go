@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,18 @@ import (
 )
 
 const mcpVersion = "1.0.0"
+
+// MCP-UI (MCP Apps, SEP-1865) product-card template. The `show` tool advertises
+// it via _meta.ui.resourceUri; the host fetches this ui:// resource and renders
+// it in a sandboxed iframe, feeding it the tool's structuredContent. mimeType
+// carries the `;profile=mcp-app` marker the spec requires.
+const (
+	cardResourceURI = "ui://mm/product-card.html"
+	cardMIME        = "text/html;profile=mcp-app"
+)
+
+//go:embed product-card.html
+var productCardHTML string
 
 // mcpInstructions is the server-level orientation sent once at initialize. It
 // carries the cross-cutting context (scope, units, workflow, id handoffs) so the
@@ -98,6 +111,46 @@ func mcpTool[In any](s *mcp.Server, name, desc string, fn func(context.Context, 
 		})
 }
 
+// mcpUITool is mcpTool plus an MCP-UI binding: the tool advertises a ui://
+// template via _meta.ui.resourceUri (Tool.Meta is copied verbatim by AddTool),
+// so a host that supports MCP Apps renders the result as a UI instead of text.
+// The returned value still becomes structuredContent — the data the template
+// renders against — and the SDK mirrors it into text for non-UI hosts.
+func mcpUITool[In any](s *mcp.Server, name, desc, resourceURI string, fn func(context.Context, In) (any, error)) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        name,
+		Description: desc,
+		Meta:        mcp.Meta{"ui": map[string]any{"resourceUri": resourceURI}},
+	},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
+			mcpMu.Lock()
+			defer mcpMu.Unlock()
+			out, err := fn(ctx, in)
+			if err != nil {
+				return nil, nil, mcpError(err)
+			}
+			return nil, out, nil
+		})
+}
+
+// registerCardResource serves the product-card HTML at cardResourceURI. The
+// template is static (data arrives per-call as structuredContent), so the
+// handler ignores the request and always returns the embedded bytes.
+func registerCardResource(s *mcp.Server) {
+	s.AddResource(&mcp.Resource{
+		Name:        "product-card",
+		URI:         cardResourceURI,
+		MIMEType:    cardMIME,
+		Description: "Interactive product cards rendered by the show tool.",
+	}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
+			URI:      cardResourceURI,
+			MIMEType: cardMIME,
+			Text:     productCardHTML,
+		}}}, nil
+	})
+}
+
 // mcpError turns the library's error taxonomy into actionable tool errors.
 // The SDK reports these to the model as an error result (isError) with the
 // message in the content, so the agent can see what went wrong and recover.
@@ -158,7 +211,42 @@ type applyArgs struct {
 	Lines []applyLine `json:"lines" jsonschema:"cart changes applied in order, each adding/setting one product"`
 }
 
+type showItem struct {
+	Slug string `json:"slug" jsonschema:"product slug (from search/browse/get_product) to display"`
+	Note string `json:"note,omitempty" jsonschema:"optional one-line reason this product is worth showing — surfaced on the card (e.g. why it fits the request)"`
+}
+
+type showArgs struct {
+	Items []showItem `json:"items" jsonschema:"the curated products to show as cards, in display order"`
+}
+
 func registerTools(s *mcp.Server, o *ops.Ops) {
+	registerCardResource(s)
+
+	mcpUITool(s, "show",
+		"Display a curated set of products to Doug as visual cards — thumbnail, name, price, weight, origin, any tags/promo, your note, and an add-to-cart button. Use this AFTER inspecting candidates with search/browse/get_product to present the few you actually recommend for his final choice; it is not for dumping raw search results. Identify each product by its slug and include a short `note` saying why it fits. Read-only: showing a product never changes the cart (the card's button does, via cart_apply).",
+		cardResourceURI,
+		func(ctx context.Context, in showArgs) (any, error) {
+			products := make([]productCardView, 0, len(in.Items))
+			var errs []map[string]string
+			for _, it := range in.Items {
+				if it.Slug == "" {
+					continue
+				}
+				d, err := o.API.ArticleBySlug(ctx, it.Slug)
+				if err != nil {
+					errs = append(errs, map[string]string{"slug": it.Slug, "error": err.Error()})
+					continue
+				}
+				products = append(products, productCard(&d.Product, it.Note))
+			}
+			out := map[string]any{"products": products}
+			if len(errs) > 0 {
+				out["errors"] = errs
+			}
+			return out, nil
+		})
+
 	mcpTool(s, "search",
 		"Search the catalog by free text — use when you know roughly what you want by name (e.g. 'tomate cerise'). Returns matching products (canonicalId, name, slug, price in euro cents, stock, plus any tags in attributes[] under key 'specific-tag' such as BIO/Nouveau/Sans nitrite, and promo). Use a product's canonicalId with cart_apply to add it.",
 		func(ctx context.Context, in searchArgs) (any, error) {

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // All prices are cents, occasionally fractional — always float64 (docs/api.md).
@@ -49,6 +50,51 @@ type Product struct {
 	Promo            *Promo      `json:"promo"`
 	ShortDescription string      `json:"shortDescription"`
 	Attributes       []Attribute `json:"attributes"`
+	// Images is only populated by /articleDetailBySlug; the search2/category
+	// feed omits it (verified 2026-06-15), so a card thumbnail needs the detail
+	// fetch. URLs are Cloudinary; see ThumbnailURL for the resized crop.
+	Images []ProductImage `json:"images"`
+}
+
+// ProductImage is one entry of a product's `images[]` (detail endpoint only).
+// Beyond url there is a name/alt and a `formats[]` list of named crops, which
+// we ignore — Cloudinary lets us request any size from the base url directly.
+type ProductImage struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
+	Alt string `json:"alt"`
+}
+
+// ThumbnailURL returns the first product image resized to a px×px padded crop
+// via Cloudinary transform params, or "" when the product carries no image.
+// The transform is injected after the "/upload/" marker, the documented place
+// for Cloudinary delivery options.
+func (p *Product) ThumbnailURL(px int) string {
+	if len(p.Images) == 0 || p.Images[0].URL == "" {
+		return ""
+	}
+	const marker = "/upload/"
+	raw := p.Images[0].URL
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		return raw // not a recognized Cloudinary url; hand back unmodified
+	}
+	i += len(marker)
+	t := fmt.Sprintf("c_pad,b_white,f_auto,q_auto,w_%d,h_%d/", px, px)
+	return raw[:i] + t + raw[i:]
+}
+
+// UnitWeight is the per-piece weight label for cards ("140 g", "1,5 kg"), from
+// itemDefinition.weight; "" when the product is not sold by piece weight.
+func (p *Product) UnitWeight() string {
+	w := p.ItemDefinition.Weight
+	if w == nil || w.Value <= 0 {
+		return ""
+	}
+	if w.Unit == "kg" && w.Value < 1 {
+		return fmt.Sprintf("%g g", w.Value*1000)
+	}
+	return fmt.Sprintf("%g %s", w.Value, w.Unit)
 }
 
 // Attribute is one entry of the product's `attributes[]` array. In the
