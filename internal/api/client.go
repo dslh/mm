@@ -14,17 +14,22 @@ import (
 	"time"
 )
 
-const baseURL = "https://www.mon-marche.fr/api"
+const defaultBaseURL = "https://www.mon-marche.fr/api"
 
-// minInterval keeps request rates human-paced (ToS review, CLAUDE.md);
+// defaultMinInterval keeps request rates human-paced (ToS review, CLAUDE.md);
 // a 0–500ms jitter is added on top.
-const minInterval = 1 * time.Second
+const defaultMinInterval = 1 * time.Second
 
 // Client authenticates with the session cookie only and serializes all
 // requests through the pacing lock.
 type Client struct {
 	httpc *http.Client
 	sess  *Session
+
+	// base is the API root and minInterval the pacing floor; both default to the
+	// production values in New and are only overridden by NewTestClient.
+	base        string
+	minInterval time.Duration
 
 	mu   sync.Mutex
 	last time.Time
@@ -36,8 +41,10 @@ func New(statePath string) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		httpc: &http.Client{Timeout: 30 * time.Second},
-		sess:  sess,
+		httpc:       &http.Client{Timeout: 30 * time.Second},
+		sess:        sess,
+		base:        defaultBaseURL,
+		minInterval: defaultMinInterval,
 	}, nil
 }
 
@@ -47,10 +54,13 @@ func (c *Client) Close() error { return c.sess.save() }
 func (c *Client) SessionExpires() time.Time { return c.sess.Expires() }
 
 func (c *Client) pace() {
+	if c.minInterval <= 0 {
+		return // pacing disabled (tests)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.last.IsZero() {
-		wait := minInterval + time.Duration(rand.Int64N(500))*time.Millisecond
+		wait := c.minInterval + time.Duration(rand.Int64N(500))*time.Millisecond
 		if d := time.Until(c.last.Add(wait)); d > 0 {
 			time.Sleep(d)
 		}
@@ -117,7 +127,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 func (c *Client) doOpts(ctx context.Context, method, path string, query url.Values, body, out any, opts reqOpts) error {
 	c.pace()
-	u := baseURL + path
+	u := c.base + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
