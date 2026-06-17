@@ -94,3 +94,12 @@ docs/            api.md (endpoint contracts) and design.md (architecture)
 ## Status
 
 Working end-to-end and verified live: CLI, MCP server, and delivery-slot selection.
+
+## License
+
+[MIT](LICENSE) © Douglas Lake-Hammond.
+
+This license covers the code in this repository only. It grants no rights over
+mon-marché's API, catalog data, or service, and is not an endorsement by or affiliation
+with MMecom SAS. Use the client for your own account, within mon-marché's terms of
+service, at human-paced request rates.
