@@ -26,8 +26,9 @@ var helpTree = []*cmdHelp{
 		args:    "<status|login>",
 		summary: "session status, or how to (re-)create it",
 		long: "Inspect or renew the login session. Auth is just the `session` cookie,\n" +
-			"persisted to .auth/state.json (or $MM_STATE). mm never handles the password —\n" +
-			"login is always typed by Doug in a headed browser.",
+			"persisted to .auth/state.json (or $MM_STATE). The password is read without\n" +
+			"echo, sent only to the signin endpoint, and never logged or stored — only the\n" +
+			"resulting cookie is saved.",
 		subs: []*cmdHelp{
 			{
 				name:    "status",
@@ -40,9 +41,16 @@ var helpTree = []*cmdHelp{
 			},
 			{
 				name:    "login",
-				summary: "how to (re-)create the session (manual browser login)",
-				long: "Prints the manual steps to capture a fresh session with playwright-cli.\n" +
-					"mm never types the password; it only reads the saved cookie.",
+				summary: "sign in and save a fresh session",
+				long: "Prompts for your mon-marché email and password, signs in via\n" +
+					"POST /auth/signin, writes the session cookie to .auth/state.json, and\n" +
+					"verifies it with a live probe. The password is read without echo and is\n" +
+					"never logged or stored. When stdin is piped it reads two lines (email,\n" +
+					"then password) so it can be scripted from a password manager.",
+				sample: "mon-marché email: doug@example.com\n" +
+					"password (hidden):\n" +
+					"logged in — session saved to .auth/state.json (expires 2026-08-16)\n" +
+					"live probe: OK — session is valid",
 			},
 		},
 	},

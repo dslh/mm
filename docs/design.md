@@ -102,8 +102,11 @@ client captures `Set-Cookie` from responses and **rewrites the cookie's `expires
 value, defensively) back into `.auth/state.json`** after a run, so `mm auth status` reads
 an accurate date without contacting the site. The token value is never printed or logged.
 
-Login stays manual: `mm auth login` prints the playwright-cli procedure (headed browser,
-Doug types credentials, `state-save .auth/state.json`).
+Login is direct: `mm auth login` signs in via `POST /api/auth/signin` (api.md "Login"),
+prompting for email + password without echo and persisting only the `session` cookie to
+`.auth/state.json`. The password is sent solely in the signin body — never logged, stored,
+or kept after the call. A headed browser login captured with `playwright-cli state-save`
+produces an equivalent file and remains a fallback if signin ever changes (captcha, etc.).
 
 ### Error taxonomy (from api.md "Failure modes")
 

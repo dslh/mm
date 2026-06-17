@@ -13,9 +13,17 @@ Auth is carried entirely by a **`session` cookie** (opaque hex token, scoped to
 send only `content-type: application/json` plus the cookie. So any client just needs to
 replay the `session` cookie from a logged-in browser.
 
-Login itself is a manual browser step (Doug types credentials). We persist the session with
-`playwright-cli state-save .auth/state.json` and restore with `state-load`. The cookie does
-expire; on expiry, re-do the manual login and re-save.
+**Login** is `POST /api/auth/signin` with `content-type: application/json` and body
+`{"email": "...", "password": "..."}`. On success it returns `200` with the user object
+(`id, email, firstName, lastName, …, accessToken`) and a `Set-Cookie: session=…;
+HttpOnly; Secure; SameSite=Lax; Path=/` header — that cookie is the only credential the
+client needs (the `accessToken` in the body is unused). The `Set-Cookie` is hidden from
+the SPA's own JavaScript (httpOnly) but is plainly visible to a non-browser HTTP client.
+**No CSRF token, captcha, or custom header is required** (verified 2026-06-16). Bad
+credentials return `401`. `mm auth login` drives this directly: it prompts for the
+password without echo, sends it only in the signin body, and persists just the cookie to
+`.auth/state.json` — the password is never logged or stored. (A browser login captured
+with `playwright-cli state-save` still produces an equivalent file.)
 
 Verified 2026-06-11 that the `session` cookie alone is sufficient (plain `curl` with just
 `Cookie: session=<token>` returns 200 + JSON — no UA, referer, or other header needed).
@@ -55,8 +63,9 @@ distinct.
 
 Do **not** probe auth with `/cart` or `/cart/light`: those return `404` with
 `code: E_08_0005` ("Le panier est introuvable") for *both* an expired session and a valid
-session with no cart — ambiguous. Also note `/api/auth/me` appears as a React-Query cache
-key carrying the user identity, but it is **not** a working GET endpoint (404); don't use it.
+session with no cart — ambiguous. Note `/api/auth/me` is a **POST** (not GET) that returns
+the current user identity: `401` before login, `200` after (verified 2026-06-16). We keep
+`/orders/past` as the probe since it's already the authenticated read used elsewhere.
 
 All prices are in **cents** (`itemPrice: 424` = 4,24 €) but are **not always integers**:
 fractional cents occur (verified 2026-06-11: `itemPrice: 206.25`, `perWeightUnit.net:

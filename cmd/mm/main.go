@@ -175,7 +175,7 @@ func usageTo(w io.Writer) {
 	fmt.Fprint(w, `mm — mon-marché shopping assistant (cart only; checkout stays in the browser)
 
   mm auth status                   session validity and expiry
-  mm auth login                    how to (re-)create the session (manual browser login)
+  mm auth login                    sign in (prompts for email + password) and save the session
 
   mm search <query> [--all]        product search; --all follows all result pages
   mm browse [slug]                 category tree, or one category's contents

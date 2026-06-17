@@ -19,9 +19,11 @@ cart read/add/remove.
 
 Endpoint discovery is done with `playwright-cli` (installed globally): drive the site in
 a headed browser and read the XHR traffic via its `requests` / `request <n>` /
-`response-body <n>` commands. Login is always typed by you in the headed
-browser — Claude never handles the password. The authenticated session is persisted with
-`state-save` to `.auth/state.json` (gitignored) and restored with `state-load`.
+`response-body <n>` commands. Claude (the assistant) never handles the password. Login
+itself is `POST /api/auth/signin` (see `docs/api.md`): `mm auth login` prompts you for
+email + password without echo, sends the password only in the signin request, and
+persists just the resulting `session` cookie to `.auth/state.json` (gitignored). A browser
+login captured with `state-save` produces an equivalent file and remains a fallback.
 
 ## Terms-of-service review (done 2026-06-11)
 
@@ -58,6 +60,9 @@ ClaudeBot/anthropic-ai. Constraints that do apply:
 - [x] Delivery-slot selection (`PATCH /cart/delivery2`) — mapped + implemented
       (`mm slots select`, MCP `select_slot`), verified live 2026-06-14. Delivery PII is
       passed through as opaque bytes, never decoded/logged/stored (see `docs/design.md` PII).
+- [x] Direct login (`POST /api/auth/signin`) — mapped + implemented as `mm auth login`
+      (prompts email + password without echo, persists only the cookie), 2026-06-16.
+      Removes the playwright-cli `state-save` step for first-time setup / re-login.
 
 ## Code
 
