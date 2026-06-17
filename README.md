@@ -18,8 +18,11 @@ commands. Endpoint contracts were reverse-engineered from live browser traffic a
 documented in [`docs/api.md`](docs/api.md); the design rationale is in
 [`docs/design.md`](docs/design.md).
 
-Authentication stays manual: you type your credentials in a headed browser, and the
-session is persisted to `.auth/state.json` (gitignored). `mm` never sees the password.
+Authentication: `mm auth login` prompts for your email and password (no echo), sends the
+password only in the `POST /api/auth/signin` request, and persists just the resulting
+`session` cookie to `.auth/state.json` (gitignored) — nothing else is stored, and the
+password is never written to disk. A browser login captured with `playwright-cli
+state-save` produces an equivalent file and remains a fallback.
 
 ## Build
 
@@ -33,7 +36,7 @@ Requires Go 1.26+.
 
 ```
 mm auth status                  session cookie expiry + live probe
-mm auth login                   prints the manual browser login procedure
+mm auth login                   prompt for email + password, store the session cookie
 
 mm search <query> [--all]       product search; --all follows pagination
 mm browse [slug]                navigation tree (no arg) or category listing
