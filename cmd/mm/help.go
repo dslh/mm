@@ -202,6 +202,14 @@ dry run — cart not modified`,
 			"The server reads .auth/state.json from its working directory, or $MM_STATE.",
 	},
 	{
+		name:    "version",
+		summary: "print version, commit, and build date",
+		long: "Print the build version, git commit, and build date. Release builds embed\n" +
+			"these via -ldflags; `go build`/`go install` builds report \"dev\".\n" +
+			"`mm --version` (or -v) is a shortcut for this command.",
+		sample: "mm version 1.0.0\ncommit: a1b2c3d\nbuilt:  2026-06-17T09:00:00Z",
+	},
+	{
 		name:    "help",
 		args:    "[command [subcommand]]",
 		summary: "show this overview, or detailed help for a command",

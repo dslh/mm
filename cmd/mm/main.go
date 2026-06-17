@@ -45,6 +45,14 @@ func run(args []string) int {
 		return printHelp(words)
 	}
 
+	// `mm --version`/`-v` anywhere is a shortcut for the version command.
+	for _, a := range rest {
+		if a == "--version" || a == "-v" {
+			printVersion(os.Stdout)
+			return 0
+		}
+	}
+
 	cmd, cmdArgs := rest[0], rest[1:]
 	ctx := context.Background()
 
@@ -70,6 +78,8 @@ func run(args []string) int {
 		err = cmdSlots(ctx, cmdArgs)
 	case "mcp":
 		err = cmdMCP(ctx, cmdArgs)
+	case "version":
+		err = cmdVersion(cmdArgs)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage()
@@ -195,7 +205,10 @@ func usageTo(w io.Writer) {
 
   mm mcp                           run the MCP server over stdio (tools for Claude)
 
-flags: --json   machine-readable output
+  mm version                       print version, commit, and build date
+
+flags: --json      machine-readable output
+       --version   print version and exit (also -v)
 env:   MM_STATE auth state path (default .auth/state.json)
 help:  mm help <command> [subcommand]  or  mm <command> --help   for detail
 `)

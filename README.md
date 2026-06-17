@@ -24,6 +24,32 @@ password only in the `POST /api/auth/signin` request, and persists just the resu
 password is never written to disk. A browser login captured with `playwright-cli
 state-save` produces an equivalent file and remains a fallback.
 
+## Install
+
+### Homebrew (macOS / Linux)
+
+```sh
+brew install dslh/tap/mm
+```
+
+### Scoop (Windows)
+
+```sh
+scoop bucket add dslh https://github.com/dslh/scoop-bucket
+scoop install mm
+```
+
+### Go install
+
+```sh
+go install github.com/dslh/mm/cmd/mm@latest
+```
+
+### Binary releases
+
+Prebuilt binaries for macOS, Linux, and Windows (amd64, arm64) are attached to each
+[GitHub release](https://github.com/dslh/mm/releases). `mm version` reports the build.
+
 ## Build
 
 ```sh
@@ -53,6 +79,8 @@ mm reorder <id> [--dry-run]     rebuild cart from a past order
 
 mm slots                        selectable delivery windows
 mm slots select <slotId>        set the cart's delivery window
+
+mm version                      build version, commit, and date
 ```
 
 Add `--json` to any command for structured output instead of compact human text.
