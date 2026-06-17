@@ -38,9 +38,9 @@ var productCardHTML string
 // mcpInstructions is the server-level orientation sent once at initialize. It
 // carries the cross-cutting context (scope, units, workflow, id handoffs) so the
 // individual tool descriptions can stay lean.
-const mcpInstructions = `mon-marché is a French online grocery (Paris/Île-de-France delivery). These tools browse the catalog and manage one shopping cart under Doug's account.
+const mcpInstructions = `mon-marché is a French online grocery (Paris/Île-de-France delivery). These tools browse the catalog and manage one shopping cart under the signed-in user's account.
 
-Scope: read the catalog, read and modify the cart, choose a delivery slot. That is all. Final review, checkout, and payment are always done by Doug in the browser — there is no tool for them, and you must never ask for or handle payment details.
+Scope: read the catalog, read and modify the cart, choose a delivery slot. That is all. Final review, checkout, and payment are always done by the user in the browser — there is no tool for them, and you must never ask for or handle payment details.
 
 Units: every monetary amount is an integer number of euro cents (424 means 4,24 €). Quantities and stock are plain item counts.
 
@@ -235,7 +235,7 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 	registerCardResource(s)
 
 	mcpUITool(s, "show",
-		"Display a curated set of products to Doug as visual cards — thumbnail, name, price, weight, origin, any tags/promo, your note, and an add-to-cart button. Use this AFTER inspecting candidates with search/browse/get_product to present the few you actually recommend for his final choice; it is not for dumping raw search results. Identify each product by its slug and include a short `note` saying why it fits. Read-only: showing a product never changes the cart (the card's button does, via cart_apply).",
+		"Display a curated set of products to the user as visual cards — thumbnail, name, price, weight, origin, any tags/promo, your note, and an add-to-cart button. Use this AFTER inspecting candidates with search/browse/get_product to present the few you actually recommend for their final choice; it is not for dumping raw search results. Identify each product by its slug and include a short `note` saying why it fits. Read-only: showing a product never changes the cart (the card's button does, via cart_apply).",
 		cardResourceURI,
 		func(ctx context.Context, in showArgs) (any, error) {
 			products := make([]productCardView, 0, len(in.Items))
@@ -356,7 +356,7 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 		})
 
 	mcpTool(s, "auth_status",
-		"Check the mon-marché session: whether it's valid (live probe) and when the cookie expires. If invalid, Doug must re-login in a browser (see `mm auth login`).",
+		"Check the mon-marché session: whether it's valid (live probe) and when the cookie expires. If invalid, the user must re-login (see `mm auth login`).",
 		func(ctx context.Context, _ struct{}) (any, error) {
 			probeErr := o.API.ProbeAuth(ctx)
 			exp := o.API.SessionExpires() // read after the probe: a valid probe rolls it forward

@@ -6,7 +6,7 @@ what we build on top of them.
 
 ## Decisions
 
-- **CLI first, MCP wrapper later.** A CLI is usable from Claude Code (and by Doug) with
+- **CLI first, MCP wrapper later.** A CLI is usable from Claude Code (and by hand) with
   zero config, and gives a direct debugging surface while the private API's failure modes
   are still being learned. The MCP server becomes a thin wrapper once the core is proven.
 - **Go.** Typed structs per response double as the API-drift detector ("fail loudly"),
@@ -53,7 +53,7 @@ mm slots select <slotId>        set the cart's delivery window (checkout stays m
 ```
 
 Global flag `--json` switches output from compact human text to structured JSON.
-Default output is compact text: agents parse it fine and it stays pleasant for Doug.
+Default output is compact text: agents parse it fine and it stays pleasant to read.
 
 ### Quantity semantics
 

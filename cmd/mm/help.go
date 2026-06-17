@@ -47,7 +47,7 @@ var helpTree = []*cmdHelp{
 					"verifies it with a live probe. The password is read without echo and is\n" +
 					"never logged or stored. When stdin is piped it reads two lines (email,\n" +
 					"then password) so it can be scripted from a password manager.",
-				sample: "mon-marché email: doug@example.com\n" +
+				sample: "mon-marché email: you@example.com\n" +
 					"password (hidden):\n" +
 					"logged in — session saved to .auth/state.json (expires 2026-08-16)\n" +
 					"live probe: OK — session is valid",
