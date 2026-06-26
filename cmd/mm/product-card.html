@@ -75,6 +75,8 @@
   var pending = new Map();
   var nextId = 0;
   var initialized = false;
+  var hostCaps = null;                 // host capabilities from ui/initialize
+  var sessionAdds = new Map();         // canonicalId -> { name, qty } added via the card this session
 
   function send(msg) { parentWin.postMessage(msg, "*"); }
   function notify(method, params) { send({ jsonrpc: "2.0", method: method, params: params || {} }); }
@@ -167,6 +169,26 @@
     return e;
   }
 
+  // Tell the agent what the user did directly on the card, WITHOUT provoking a
+  // turn: ui/update-model-context is deferred until the next user message and
+  // overwrites the prior update — so we always resend the full running tally,
+  // never just the latest click. Gated on the host advertising the capability;
+  // if it doesn't, the card's add still works, it just goes un-narrated.
+  function narrateAdds() {
+    if (!hostCaps || !hostCaps.updateModelContext || !sessionAdds.size) return;
+    var lines = [], items = [];
+    sessionAdds.forEach(function (v, id) {
+      lines.push(v.qty + " × " + v.name);
+      items.push({ canonicalId: id, name: v.name, quantity: v.qty });
+    });
+    request("ui/update-model-context", {
+      content: [{ type: "text", text:
+        "The user added these to the cart directly via the product card (not through a tool call): " +
+        lines.join(", ") + "." }],
+      structuredContent: { cardCartAdditions: items },
+    }, 8000).catch(function () { /* best-effort context; never disrupt the UI */ });
+  }
+
   function addToCart(p, btn) {
     if (!initialized) { setStatus("Pas encore connecté à l'hôte.", true); return; }
     var orig = btn.textContent;
@@ -176,6 +198,9 @@
         if (res && res.isError) throw new Error("le serveur a refusé l'ajout");
         btn.textContent = "✓ Ajouté";
         setStatus("Ajouté au panier : " + p.name, false);
+        var cur = sessionAdds.get(p.canonicalId) || { name: p.name, qty: 0 };
+        cur.qty += 1; sessionAdds.set(p.canonicalId, cur);
+        narrateAdds();
       })
       .catch(function (e) {
         btn.disabled = false; btn.textContent = orig;
@@ -253,6 +278,7 @@
     protocolVersion: PROTOCOL_VERSION,
   }).then(function (result) {
     if (result && result.hostContext) applyHostContext(result.hostContext);
+    if (result && result.hostCapabilities) hostCaps = result.hostCapabilities;
     notify("ui/notifications/initialized");
     initialized = true;
     setStatus("En attente des produits…", false);
