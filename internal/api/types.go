@@ -50,9 +50,10 @@ type Product struct {
 	Promo            *Promo      `json:"promo"`
 	ShortDescription string      `json:"shortDescription"`
 	Attributes       []Attribute `json:"attributes"`
-	// Images is only populated by /articleDetailBySlug; the search2/category
-	// feed omits it (verified 2026-06-15), so a card thumbnail needs the detail
-	// fetch. URLs are Cloudinary; see ThumbnailURL for the resized crop.
+	// Images: the search2/category feed and the cart now carry these too — not
+	// just /articleDetailBySlug as before (the feed added them by 2026-06-27;
+	// the old "detail only" note no longer holds). Images[0] is the hero shot;
+	// URLs are Cloudinary, see ThumbnailURL for the resized crop.
 	Images []ProductImage `json:"images"`
 }
 
@@ -67,14 +68,17 @@ type ProductImage struct {
 
 // ThumbnailURL returns the first product image resized to a px×px padded crop
 // via Cloudinary transform params, or "" when the product carries no image.
-// The transform is injected after the "/upload/" marker, the documented place
-// for Cloudinary delivery options.
-func (p *Product) ThumbnailURL(px int) string {
-	if len(p.Images) == 0 || p.Images[0].URL == "" {
+func (p *Product) ThumbnailURL(px int) string { return thumbnailURL(p.Images, px) }
+
+// thumbnailURL resizes the first image to a px×px padded crop via Cloudinary
+// transform params, injected after the "/upload/" marker (the documented place
+// for Cloudinary delivery options); "" when there is no usable image.
+func thumbnailURL(images []ProductImage, px int) string {
+	if len(images) == 0 || images[0].URL == "" {
 		return ""
 	}
 	const marker = "/upload/"
-	raw := p.Images[0].URL
+	raw := images[0].URL
 	i := strings.Index(raw, marker)
 	if i < 0 {
 		return raw // not a recognized Cloudinary url; hand back unmodified
@@ -87,14 +91,22 @@ func (p *Product) ThumbnailURL(px int) string {
 // UnitWeight is the per-piece weight label for cards ("140 g", "1,5 kg"), from
 // itemDefinition.weight; "" when the product is not sold by piece weight.
 func (p *Product) UnitWeight() string {
-	w := p.ItemDefinition.Weight
-	if w == nil || w.Value <= 0 {
+	if p.ItemDefinition.Weight == nil {
 		return ""
 	}
-	if w.Unit == "kg" && w.Value < 1 {
-		return fmt.Sprintf("%g g", w.Value*1000)
+	return unitWeightLabel(p.ItemDefinition.Weight.Value, p.ItemDefinition.Weight.Unit)
+}
+
+// unitWeightLabel formats a weight as cards show it — sub-kilo values render in
+// grams ("140 g"), everything else in its own unit ("1.5 kg"); "" for none.
+func unitWeightLabel(value float64, unit string) string {
+	if value <= 0 {
+		return ""
 	}
-	return fmt.Sprintf("%g %s", w.Value, w.Unit)
+	if unit == "kg" && value < 1 {
+		return fmt.Sprintf("%g g", value*1000)
+	}
+	return fmt.Sprintf("%g %s", value, unit)
 }
 
 // Attribute is one entry of the product's `attributes[]` array. In the
@@ -290,6 +302,46 @@ type CartProduct struct {
 		Count    int  `json:"count"`
 	} `json:"quotation"`
 	Promo *Promo `json:"promo"`
+	// Images and ItemDefinition: the cart feed carries product photos (Images[0]
+	// is the hero shot) and the per-piece weight (verified 2026-06-27), so a
+	// confirmation card needs no extra detail fetch. Both are decoded into memory
+	// for the card but dropped on the way back out (see MarshalJSON): they'd add
+	// noise to the agent-facing cart JSON for no benefit there.
+	Images         []ProductImage      `json:"images,omitempty"`
+	ItemDefinition *cartItemDefinition `json:"itemDefinition,omitempty"`
+}
+
+// cartItemDefinition is the slice of the cart line's itemDefinition the card
+// uses — just the per-piece weight (mirrors Product.ItemDefinition.Weight).
+type cartItemDefinition struct {
+	Type   string `json:"type"`
+	Weight *struct {
+		Value float64 `json:"value"`
+		Unit  string  `json:"unit"`
+	} `json:"weight"`
+}
+
+// MarshalJSON emits the cart line without Images/ItemDefinition: they exist only
+// to build confirmation cards in-process and would otherwise bloat every cart
+// the tools hand back to the model. The alias sheds this method to avoid recursion.
+func (p CartProduct) MarshalJSON() ([]byte, error) {
+	type alias CartProduct
+	a := alias(p)
+	a.Images, a.ItemDefinition = nil, nil
+	return json.Marshal(a)
+}
+
+// ThumbnailURL returns the cart line's hero image resized to a px×px padded
+// crop, or "" when the line carries no image.
+func (p *CartProduct) ThumbnailURL(px int) string { return thumbnailURL(p.Images, px) }
+
+// UnitWeight is the per-piece weight label ("140 g", "1.5 kg") for the cart
+// line, or "" when it is not sold by piece weight.
+func (p *CartProduct) UnitWeight() string {
+	if p.ItemDefinition == nil || p.ItemDefinition.Weight == nil {
+		return ""
+	}
+	return unitWeightLabel(p.ItemDefinition.Weight.Value, p.ItemDefinition.Weight.Unit)
 }
 
 type CartPrice struct {

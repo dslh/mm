@@ -339,9 +339,13 @@ Top-level keys:
   "name": "...", "itemPrice": 424,
   "quotation":  { "editable": true, "count": 1, "weight": 1 },     // <-- quantity lives here
   "quotation2": { "count": { "quantity": 1, "freeQuantity": 0, "itemDefinition": {...} } },
-  "pricing": {...}, "originalPricing": {...}, "promo": {...}, "availableQuantity": 188
+  "pricing": {...}, "originalPricing": {...}, "promo": {...}, "availableQuantity": 188,
+  "images": [ /* cloudinary urls + format crops, same shape as search */ ]  // verified 2026-06-27
 }
 ```
+`images[0]` is the hero shot — the `mm` client reads it straight off the cart to
+build the cart_apply confirmation thumbnail (no extra `/articleDetailBySlug`
+fetch), then drops it from the agent-facing cart JSON.
 
 `price` block (all cents):
 ```jsonc

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>mm · MCP Apps mock host — cart-added</title>
+<style>
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f3f4f6; color: #111827; }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #111827; color: #fff; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  button { font: inherit; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; background: #374151; color: #fff; }
+  main { display: grid; grid-template-columns: 1fr 360px; gap: 16px; padding: 16px; align-items: start; }
+  .frame-wrap { background: #fff; border: 1px solid #d1d5db; border-radius: 12px; padding: 10px; }
+  .frame-wrap .label { font-size: 12px; color: #6b7280; padding: 0 4px 8px; }
+  iframe { width: 100%; border: 0; display: block; }
+  #log { background: #0b0e14; color: #cbd5e1; border-radius: 12px; padding: 12px; font: 12px/1.5 ui-monospace, Menlo, monospace;
+    height: 70vh; overflow: auto; white-space: pre-wrap; }
+  #log .out { color: #7fd1a3; } #log .in { color: #93c5fd; } #log .err { color: #f3a39c; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCP Apps mock host — cart-added.html</h1>
+  <div class="spacer"></div>
+  <button id="theme">Toggle theme</button>
+  <button id="reload">Reload iframe</button>
+</header>
+<main>
+  <div class="frame-wrap">
+    <div class="label">sandboxed view (deny-by-default, allow-scripts only)</div>
+    <iframe id="view" sandbox="allow-scripts" src="../cmd/mm/cart-added.html"></iframe>
+  </div>
+  <div id="log"></div>
+</main>
+
+<script>
+// Minimal MCP Apps HOST for cart-added.html — mirrors mock-host.html but feeds
+// the `added` strip shape cart_apply emits. The remove button's cart_apply
+// tools/call is logged and acked (no live mon-marché call).
+(function () {
+  var iframe = document.getElementById("view");
+  var logEl = document.getElementById("log");
+  var theme = "light";
+
+  // Sample structuredContent — same shape addedCards() emits: a single-quantity
+  // add, a multi-quantity add, a stock-clamped add, and one with no thumbnail.
+  var SAMPLE = {
+    added: [
+      {
+        canonicalId: "Al-GYRYH-", slug: "le-roti-de-porc-echine", name: "Le Rôti de porc échine",
+        thumbnail: "https://res.cloudinary.com/keplr/image/upload/c_pad,b_white,f_auto,q_auto,w_160,h_160/v1667496083/production/mon_marche/B340_ROTI_DE_PORC_ECHINE_650G_B_2.jpg",
+        unitWeight: "610 g", quantity: 1, unitCents: 914, lineCents: 914
+      },
+      {
+        canonicalId: "wpVrlc3n1", slug: "les-cotes-de-porc-echine", name: "Les Côtes de porc échine extra-fondantes x4",
+        thumbnail: "https://res.cloudinary.com/keplr/image/upload/c_pad,b_white,f_auto,q_auto,w_160,h_160/v1681819900/production/mon_marche/B02U_LES_COTES_DE_PORC_ECHINE_X4.jpg",
+        unitWeight: "810 g", quantity: 3, unitCents: 890, lineCents: 2670
+      },
+      {
+        canonicalId: "Zk9clamped", slug: "tomate-grappe", name: "Tomate grappe",
+        thumbnail: "", quantity: 2, unitCents: 320, lineCents: 640, clamped: true
+      }
+    ]
+  };
+
+  function log(dir, msg) {
+    var line = document.createElement("div");
+    line.className = dir;
+    line.textContent = (dir === "out" ? "→ " : dir === "in" ? "← " : "! ") + msg;
+    logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
+  }
+  function send(msg) { iframe.contentWindow.postMessage(msg, "*"); }
+
+  window.addEventListener("message", function (e) {
+    if (e.source !== iframe.contentWindow) return;
+    var m = e.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+
+    if (m.method === "ui/initialize") {
+      log("in", "ui/initialize");
+      send({ jsonrpc: "2.0", id: m.id, result: {
+        protocolVersion: "2026-01-26",
+        hostInfo: { name: "mock-host", version: "1.0.0" },
+        hostCapabilities: { serverTools: {}, openLinks: {} },
+        hostContext: { theme: theme, displayMode: "inline", availableDisplayModes: ["inline"] }
+      }});
+      log("out", "ui/initialize result");
+      return;
+    }
+    if (m.method === "ui/notifications/initialized") {
+      log("in", "initialized — pushing tool-result");
+      send({ jsonrpc: "2.0", method: "ui/notifications/tool-result",
+        params: { content: [{ type: "text", text: JSON.stringify(SAMPLE) }], structuredContent: SAMPLE } });
+      log("out", "ui/notifications/tool-result (" + SAMPLE.added.length + " added)");
+      return;
+    }
+    if (m.method === "ui/notifications/size-changed") {
+      iframe.style.height = (m.params.height || 0) + "px";
+      log("in", "size-changed height=" + m.params.height);
+      return;
+    }
+    if (m.method === "tools/call") {
+      log("in", "tools/call " + m.params.name + " " + JSON.stringify(m.params.arguments));
+      send({ jsonrpc: "2.0", id: m.id, result: {
+        content: [{ type: "text", text: "ok (mock)" }],
+        structuredContent: { ok: true }
+      }});
+      log("out", "tools/call result (mock ok)");
+      return;
+    }
+    if (m.method === "ping") { send({ jsonrpc: "2.0", id: m.id, result: {} }); return; }
+    if (m.method) log("in", m.method + " (ignored)");
+  });
+
+  document.getElementById("theme").onclick = function () {
+    theme = theme === "light" ? "dark" : "light";
+    send({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { hostContext: { theme: theme } } });
+    log("out", "host-context-changed theme=" + theme);
+  };
+  document.getElementById("reload").onclick = function () { iframe.src = iframe.src; logEl.replaceChildren(); };
+})();
+</script>
+</body>
+</html>

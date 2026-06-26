@@ -24,8 +24,9 @@ const mcpVersion = "1.0.0"
 // it in a sandboxed iframe, feeding it the tool's structuredContent. mimeType
 // carries the `;profile=mcp-app` marker the spec requires.
 const (
-	cardResourceURI = "ui://mm/product-card.html"
-	cardMIME        = "text/html;profile=mcp-app"
+	cardResourceURI  = "ui://mm/product-card.html"
+	addedResourceURI = "ui://mm/cart-added.html"
+	cardMIME         = "text/html;profile=mcp-app"
 	// cardImageOrigin is the Cloudinary origin product thumbnails load from
 	// (see api.Product.ThumbnailURL); declared in the resource CSP so the host
 	// sandbox permits the images.
@@ -34,6 +35,9 @@ const (
 
 //go:embed product-card.html
 var productCardHTML string
+
+//go:embed cart-added.html
+var cartAddedHTML string
 
 // mcpInstructions is the server-level orientation sent once at initialize. It
 // carries the cross-cutting context (scope, units, workflow, id handoffs) so the
@@ -137,24 +141,23 @@ func mcpUITool[In any](s *mcp.Server, name, desc, resourceURI string, fn func(co
 		})
 }
 
-// registerCardResource serves the product-card HTML at cardResourceURI. The
-// template is static (data arrives per-call as structuredContent), so the
-// handler ignores the request and always returns the embedded bytes.
-func registerCardResource(s *mcp.Server) {
+// registerUIResource serves one static MCP-UI template at uri. The templates
+// are static (data arrives per-call as structuredContent), so the handler
+// ignores the request and always returns the embedded bytes. The sandbox CSP
+// is deny-by-default, so product thumbnails (Cloudinary) are blocked unless
+// their origin is declared here: resourceDomains maps to img-src (per
+// SEP-1865), set on the contents object, not the Resource descriptor.
+func registerUIResource(s *mcp.Server, name, uri, desc, html string) {
 	s.AddResource(&mcp.Resource{
-		Name:        "product-card",
-		URI:         cardResourceURI,
+		Name:        name,
+		URI:         uri,
 		MIMEType:    cardMIME,
-		Description: "Interactive product cards rendered by the show tool.",
+		Description: desc,
 	}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
-			URI:      cardResourceURI,
+			URI:      uri,
 			MIMEType: cardMIME,
-			Text:     productCardHTML,
-			// The sandbox CSP is deny-by-default, so the card's product
-			// thumbnails (Cloudinary) are blocked unless their origin is
-			// declared here. resourceDomains maps to img-src (per SEP-1865);
-			// it's set on the contents object, not the Resource descriptor.
+			Text:     html,
 			Meta: mcp.Meta{"ui": map[string]any{
 				"csp": map[string]any{"resourceDomains": []string{cardImageOrigin}},
 			}},
@@ -232,7 +235,10 @@ type showArgs struct {
 }
 
 func registerTools(s *mcp.Server, o *ops.Ops) {
-	registerCardResource(s)
+	registerUIResource(s, "product-card", cardResourceURI,
+		"Interactive product cards rendered by the show tool.", productCardHTML)
+	registerUIResource(s, "cart-added", addedResourceURI,
+		"Confirmation cards rendered by cart_apply for items just added to the cart.", cartAddedHTML)
 
 	mcpUITool(s, "show",
 		"Display a curated set of products to the user as visual cards — thumbnail, name, price, weight, origin, any tags/promo, your note, and an add-to-cart button. Use this AFTER inspecting candidates with search/browse/get_product to present the few you actually recommend for their final choice; it is not for dumping raw search results. Identify each product by its slug and include a short `note` saying why it fits. Read-only: showing a product never changes the cart (the card's button does, via cart_apply).",
@@ -292,8 +298,9 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 			return viewCart(cart), nil
 		})
 
-	mcpTool(s, "cart_apply",
-		"Add to / set / remove cart items in one call. Each line targets a product by `query` (first search hit) or exact `id` (canonicalId), and either increments by `n` (default 1) or sets an absolute quantity with `set` (`set:0` removes). Quantities over stock are clamped and reported. Returns a per-line outcome plus the updated cart. This is the only cart-mutation tool; checkout and payment stay in the browser.",
+	mcpUITool(s, "cart_apply",
+		"Add to / set / remove cart items in one call. Each line targets a product by `query` (first search hit) or exact `id` (canonicalId), and either increments by `n` (default 1) or sets an absolute quantity with `set` (`set:0` removes). Quantities over stock are clamped and reported. Returns a per-line outcome plus the updated cart, and shows the user a visual confirmation card (thumbnail, name, quantity, cost, remove button) for each item added. This is the only cart-mutation tool; checkout and payment stay in the browser.",
+		addedResourceURI,
 		func(ctx context.Context, in applyArgs) (any, error) {
 			lines := make([]ops.ApplyLine, len(in.Lines))
 			for i, l := range in.Lines {
@@ -303,7 +310,11 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 			if err != nil {
 				return nil, err
 			}
-			return map[string]any{"outcomes": outcomes, "cart": viewCart(cart)}, nil
+			return map[string]any{
+				"outcomes": outcomes,
+				"cart":     viewCart(cart),
+				"added":    addedCards(cart, outcomes),
+			}, nil
 		})
 
 	mcpTool(s, "list_orders",

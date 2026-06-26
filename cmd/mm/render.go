@@ -145,6 +145,66 @@ func productCard(p *api.Product, note string) productCardView {
 	return c
 }
 
+// cartAddedView is one card in the cart_apply confirmation strip
+// (cmd/mm/cart-added.html): a product that just landed in the cart, with the
+// quantity now held, the line cost, and a thumbnail. Prices are euro cents (the
+// template formats them). None of these fields are PII — CanonicalID drives the
+// card's remove button (cart_apply set:0).
+type cartAddedView struct {
+	CanonicalID string  `json:"canonicalId"`
+	Name        string  `json:"name"`
+	Thumbnail   string  `json:"thumbnail,omitempty"`
+	UnitWeight  string  `json:"unitWeight,omitempty"` // per-piece weight label, when sold that way
+	Quantity    int     `json:"quantity"`
+	LineCents   float64 `json:"lineCents"` // unitPrice × quantity
+	UnitCents   float64 `json:"unitCents"`
+	Clamped     bool    `json:"clamped,omitempty"` // quantity was capped to available stock
+}
+
+// addedCards builds the cart_apply confirmation strip: one card per outcome
+// that left a product in the cart (a successful add/update or a stock-clamped
+// add with positive quantity). Removals, errors, out-of-stock and not-found
+// outcomes stay in the textual outcomes, off the strip. The thumbnail is read
+// straight from the post-mutation cart — which carries product images — so no
+// extra fetch and no slug is needed, for id- and query-based adds alike.
+func addedCards(cart *api.Cart, outcomes []ops.ItemOutcome) []cartAddedView {
+	byID := map[string]*api.CartProduct{}
+	if cart != nil {
+		for i := range cart.Products {
+			p := &cart.Products[i]
+			byID[p.CanonicalID] = p
+		}
+	}
+	cards := make([]cartAddedView, 0, len(outcomes))
+	for _, oc := range outcomes {
+		if oc.Final <= 0 {
+			continue
+		}
+		switch oc.Status {
+		case ops.StatusUpdated, ops.StatusClamped:
+		default:
+			continue
+		}
+		name := oc.Name
+		if name == "" {
+			name = oc.CanonicalID
+		}
+		card := cartAddedView{
+			CanonicalID: oc.CanonicalID,
+			Name:        name,
+			Quantity:    oc.Final,
+			LineCents:   float64(oc.Final) * oc.UnitPrice,
+			UnitCents:   oc.UnitPrice,
+			Clamped:     oc.Status == ops.StatusClamped,
+		}
+		if p := byID[oc.CanonicalID]; p != nil {
+			card.Thumbnail, card.UnitWeight = p.ThumbnailURL(160), p.UnitWeight()
+		}
+		cards = append(cards, card)
+	}
+	return cards
+}
+
 func renderCart(c *api.Cart) {
 	if len(c.Products) == 0 {
 		fmt.Println("Cart is empty.")

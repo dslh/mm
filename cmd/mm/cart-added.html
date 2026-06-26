@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mon-marché — ajouté au panier</title>
+<style>
+  /* Deny-by-default CSP: inline styles/scripts only, no external network.
+     Everything here is self-contained — no fonts, scripts, or images fetched
+     except product thumbnails (img-src is permitted for Cloudinary). */
+  :root {
+    --bg: #ffffff; --fg: #1d2026; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #1f7a4d; --accent-fg: #ffffff; --pill: #eef6f1; --pill-fg: #1f7a4d;
+    --promo: #fde7e7; --promo-fg: #b42318; --shadow: 0 1px 3px rgba(16,24,40,.08);
+  }
+  /* Dark palette: applied when the host reports a dark theme, and (when the
+     host says nothing) when the OS prefers dark. Host theme wins via [data-theme]. */
+  body[data-theme="dark"] {
+    --bg:#15181d; --fg:#e8eaed; --muted:#9aa1ac; --line:#2a2f37;
+    --pill:#16271f; --pill-fg:#7fd1a3; --promo:#3a1d1d; --promo-fg:#f3a39c; --shadow:none;
+  }
+  @media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) {
+      --bg:#15181d; --fg:#e8eaed; --muted:#9aa1ac; --line:#2a2f37;
+      --pill:#16271f; --pill-fg:#7fd1a3; --promo:#3a1d1d; --promo-fg:#f3a39c; --shadow:none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font: 14px/1.45 -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--fg); background: var(--bg); }
+  #status { display: flex; align-items: center; gap: 6px; color: var(--accent);
+    font-size: 13px; font-weight: 600; padding: 2px 2px 10px; }
+  #status.error { color: var(--promo-fg); }
+  #status.muted { color: var(--muted); font-weight: 400; }
+  /* Vertical stack: one full-width row per item, divided by a single underline
+     (no card border) so product names have room to wrap. */
+  #strip { display: flex; flex-direction: column; }
+  .item { display: flex; align-items: center; gap: 12px; padding: 10px 2px;
+    border-bottom: 1px solid var(--line); }
+  .item:last-child { border-bottom: none; }
+  .item.removed { opacity: .5; }
+  .item.removed .info { text-decoration: line-through; }
+  .thumb { width: 72px; height: 72px; flex: none; border-radius: 8px; object-fit: contain;
+    background: #fff; border: 1px solid var(--line); }
+  .thumb.placeholder { display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 32px; background: var(--pill); }
+  .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .name { font-weight: 600; font-size: 14px; line-height: 1.25; overflow-wrap: anywhere; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .price { font-size: 13px; font-weight: 700; }
+  .price .qty { font-weight: 400; color: var(--muted); }
+  .clamp { font-size: 11px; color: var(--promo-fg); }
+  .remove { flex: none; width: 26px; height: 26px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; }
+  .remove:hover:not(:disabled) { border-color: var(--promo-fg); color: var(--promo-fg); }
+  .remove:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+  <div id="status">Chargement…</div>
+  <div id="strip"></div>
+
+<script>
+// MCP Apps View, hand-rolled (no external deps — the sandbox CSP forbids them).
+// Same JSON-RPC 2.0 over window.postMessage lifecycle as product-card.html
+// (ui/initialize → initialized → tool-result → size-changed); see that file's
+// header for the protocol notes. This view renders cart_apply's `added` strip
+// and lets each card remove its line via a cart_apply tools/call (set:0).
+(function () {
+  "use strict";
+  var PROTOCOL_VERSION = "2026-01-26";
+  var parentWin = window.parent;
+  var statusEl = document.getElementById("status");
+  var strip = document.getElementById("strip");
+  var pending = new Map();
+  var nextId = 0;
+  var initialized = false;
+
+  function send(msg) { parentWin.postMessage(msg, "*"); }
+  function notify(method, params) { send({ jsonrpc: "2.0", method: method, params: params || {} }); }
+  function request(method, params, timeoutMs) {
+    var id = ++nextId;
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () { pending.delete(id); reject(new Error("timeout: " + method)); }, timeoutMs || 8000);
+      pending.set(id, { resolve: resolve, reject: reject, t: t });
+      send({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    });
+  }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== parentWin) return;            // only trust the host frame
+    var m = event.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && (("result" in m) || ("error" in m))) {
+      var p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id); clearTimeout(p.t);
+      if ("error" in m) p.reject(new Error((m.error && m.error.message) || "request failed"));
+      else p.resolve(m.result);
+      return;
+    }
+    if (typeof m.method === "string") handleInbound(m);
+  });
+
+  function handleInbound(m) {
+    switch (m.method) {
+      case "ui/notifications/tool-result":
+        render(m.params && m.params.structuredContent);
+        break;
+      case "ui/notifications/host-context-changed":
+        applyHostContext(m.params && m.params.hostContext);
+        break;
+      case "ui/notifications/tool-input":
+      case "ui/notifications/tool-input-partial":
+      case "ui/notifications/tool-cancelled":
+        break;                                          // not needed for static cards
+      case "ping":
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+        break;
+      case "ui/request-display-mode":
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: { mode: "inline" } });
+        break;
+      default:
+        // Reply to any unknown *request* so a strict host doesn't hang waiting.
+        if (m.id !== undefined) send({ jsonrpc: "2.0", id: m.id, result: {} });
+    }
+  }
+
+  function applyHostContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme === "dark" || ctx.theme === "light") document.body.setAttribute("data-theme", ctx.theme);
+    var vars = ctx.styles && ctx.styles.variables;
+    if (vars) {
+      var map = {
+        "--color-background-primary": "--bg", "--color-text-primary": "--fg",
+        "--color-text-tertiary": "--muted", "--color-border-primary": "--line",
+      };
+      for (var k in map) if (vars[k]) document.documentElement.style.setProperty(map[k], vars[k]);
+    }
+  }
+
+  // Report content height to the host; without this the iframe stays 0px tall
+  // and nothing is visible even though everything else works.
+  var lastH = 0;
+  function reportSize() {
+    var h = Math.ceil(document.documentElement.scrollHeight);
+    if (h && h !== lastH) { lastH = h; notify("ui/notifications/size-changed", { height: h }); }
+  }
+  if (window.ResizeObserver) new ResizeObserver(reportSize).observe(document.documentElement);
+  window.addEventListener("load", reportSize);
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg;
+    statusEl.classList.toggle("error", kind === "error");
+    statusEl.classList.toggle("muted", kind === "muted");
+    reportSize();
+  }
+
+  function euro(cents) {
+    var c = Math.round(Math.abs(Number(cents) || 0));
+    return (cents < 0 ? "-" : "") + Math.floor(c / 100) + "," + String(c % 100).padStart(2, "0") + " €";
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function removeLine(p, card, btn) {
+    if (!initialized) { setStatus("Pas encore connecté à l'hôte.", "error"); return; }
+    btn.disabled = true;
+    request("tools/call", { name: "cart_apply", arguments: { lines: [{ id: p.canonicalId, set: 0 }] } }, 30000)
+      .then(function (res) {
+        if (res && res.isError) throw new Error("le serveur a refusé le retrait");
+        card.classList.add("removed");
+        btn.textContent = "↩";
+        setStatus("Retiré du panier : " + (p.name || ""), "muted");
+      })
+      .catch(function (e) {
+        btn.disabled = false;
+        setStatus("Échec du retrait : " + (e.message || e), "error");
+      });
+  }
+
+  function renderItem(p) {
+    var card = el("div", "item");
+
+    if (p.thumbnail) {
+      var img = el("img", "thumb");
+      img.src = p.thumbnail; img.alt = p.name || ""; img.loading = "lazy";
+      img.onerror = function () { img.replaceWith(el("div", "thumb placeholder", "🧺")); };
+      card.appendChild(img);
+    } else {
+      card.appendChild(el("div", "thumb placeholder", "🧺"));
+    }
+
+    var info = el("div", "info");
+    info.appendChild(el("div", "name", p.name || p.canonicalId || "Produit"));
+
+    if (p.unitWeight) info.appendChild(el("div", "meta", p.unitWeight));
+
+    var price = el("div", "price");
+    var qty = Number(p.quantity) || 1;
+    if (qty > 1) {
+      var q = el("span", "qty");
+      q.textContent = qty + " × " + euro(p.unitCents) + " = ";
+      price.appendChild(q);
+    }
+    price.appendChild(document.createTextNode(euro(p.lineCents)));
+    info.appendChild(price);
+
+    if (p.clamped) info.appendChild(el("div", "clamp", "quantité limitée au stock dispo"));
+    card.appendChild(info);
+
+    var btn = el("button", "remove", "✕");
+    btn.title = "Retirer du panier";
+    btn.setAttribute("aria-label", "Retirer " + (p.name || "") + " du panier");
+    btn.addEventListener("click", function () { removeLine(p, card, btn); });
+    card.appendChild(btn);
+
+    return card;
+  }
+
+  function render(data) {
+    var added = (data && data.added) || [];
+    strip.replaceChildren();
+    for (var i = 0; i < added.length; i++) strip.appendChild(renderItem(added[i]));
+
+    if (!added.length) { setStatus("Aucun article ajouté.", "muted"); return; }
+    var n = added.length;
+    setStatus((n > 1 ? "✓ " + n + " articles ajoutés au panier" : "✓ Ajouté au panier"), null);
+    reportSize();
+  }
+
+  // Handshake. If the host never answers ui/initialize, the timeout surfaces a
+  // visible message rather than a silent blank frame.
+  request("ui/initialize", {
+    appInfo: { name: "mm cart-added", version: "1.0.0" },
+    appCapabilities: {},
+    protocolVersion: PROTOCOL_VERSION,
+  }).then(function (result) {
+    if (result && result.hostContext) applyHostContext(result.hostContext);
+    notify("ui/notifications/initialized");
+    initialized = true;
+    setStatus("En attente du panier…", "muted");
+  }).catch(function (e) {
+    setStatus("Connexion à l'hôte échouée : " + (e.message || e), "error");
+  });
+})();
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,39 @@ func TestThumbnailURL(t *testing.T) {
 				t.Errorf("ThumbnailURL = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The cart feed now carries product images: they must decode (for the
+// confirmation thumbnail) yet be dropped on the way back out, so the bulky
+// images/formats arrays never bloat the agent-facing cart JSON.
+func TestCartProductImagesDecodeButNotMarshal(t *testing.T) {
+	raw := `{"canonicalId":"p1","name":"Tomate","itemPrice":499,
+		"itemDefinition":{"type":"pieceWeight","weight":{"value":0.61,"unit":"kg"}},
+		"images":[{"id":"i1","url":"https://res.cloudinary.com/mm/image/upload/v1/t.jpg",
+		"formats":[{"id":"square","ratio":1}]}]}`
+	var p CartProduct
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(p.Images) != 1 {
+		t.Fatalf("images not decoded: %+v", p.Images)
+	}
+	if got := p.ThumbnailURL(160); got != "https://res.cloudinary.com/mm/image/upload/c_pad,b_white,f_auto,q_auto,w_160,h_160/v1/t.jpg" {
+		t.Errorf("ThumbnailURL = %q", got)
+	}
+	if got := p.UnitWeight(); got != "610 g" {
+		t.Errorf("UnitWeight = %q, want 610 g", got)
+	}
+
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, leaked := range []string{"image", "cloudinary", "itemDefinition", "weight"} {
+		if strings.Contains(string(out), leaked) {
+			t.Errorf("marshalled cart product leaked %q: %s", leaked, out)
+		}
 	}
 }
 

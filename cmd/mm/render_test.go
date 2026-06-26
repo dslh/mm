@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -19,8 +20,8 @@ func TestEuro(t *testing.T) {
 		{8000, "80,00 €"},
 		{5, "0,05 €"},
 		{-250, "-2,50 €"},
-		{424.4, "4,24 €"},  // rounds down
-		{424.6, "4,25 €"},  // rounds up
+		{424.4, "4,24 €"}, // rounds down
+		{424.6, "4,25 €"}, // rounds up
 		{99999, "999,99 €"},
 	}
 	for _, tc := range tests {
@@ -135,12 +136,12 @@ func TestViewCartHidesDelivery(t *testing.T) {
 
 func TestProductCard(t *testing.T) {
 	p := &api.Product{
-		CanonicalID:      "p1",
-		Slug:             "tomate-grappe",
-		Name:             "Tomate Grappe",
-		ItemPrice:        320,
-		Origin:           "France",
-		ShortDescription: "Belle tomate",
+		CanonicalID:       "p1",
+		Slug:              "tomate-grappe",
+		Name:              "Tomate Grappe",
+		ItemPrice:         320,
+		Origin:            "France",
+		ShortDescription:  "Belle tomate",
 		AvailableQuantity: 7,
 	}
 	promo := &api.Promo{}
@@ -157,6 +158,61 @@ func TestProductCard(t *testing.T) {
 	}
 	if card.Promo != "[promo -10%]" {
 		t.Errorf("card promo = %q", card.Promo)
+	}
+}
+
+func TestAddedCards(t *testing.T) {
+	// Build a cart whose product p1 carries an image, so the card thumbnail is
+	// read straight from the cart (no slug, no extra fetch).
+	cart := &api.Cart{Products: []api.CartProduct{
+		{CanonicalID: "p1", Name: "Tomate", Images: []api.ProductImage{
+			{URL: "https://res.cloudinary.com/keplr/image/upload/v1/tomate.jpg"},
+		}},
+		{CanonicalID: "p9", Name: "Sans image"}, // no images/weight → empty thumbnail + weight
+	}}
+	// itemDefinition rides on the cart line; its Go type is unexported, so set it
+	// the way the API does — by decoding JSON into the existing product.
+	if err := json.Unmarshal([]byte(`{"itemDefinition":{"weight":{"value":0.61,"unit":"kg"}}}`), &cart.Products[0]); err != nil {
+		t.Fatalf("seed itemDefinition: %v", err)
+	}
+
+	outcomes := []ops.ItemOutcome{
+		{Status: ops.StatusUpdated, Name: "Tomate", CanonicalID: "p1", Final: 3, UnitPrice: 200},
+		{Status: ops.StatusClamped, Name: "Tomate", CanonicalID: "p1", Final: 2, UnitPrice: 200},
+		{Status: ops.StatusUpdated, CanonicalID: "p9", Final: 1}, // missing name → canonicalId fallback
+		// None of these should reach the strip:
+		{Status: ops.StatusRemoved, CanonicalID: "p1"},
+		{Status: ops.StatusUpdated, CanonicalID: "p1", Final: 0}, // set:0 via update path
+		{Status: ops.StatusOutOfStock, CanonicalID: "p1"},
+		{Status: ops.StatusNotFound, Via: "search:licorne"},
+		{Status: ops.StatusError, CanonicalID: "p1", Err: "boom"},
+	}
+
+	cards := addedCards(cart, outcomes)
+	if len(cards) != 3 {
+		t.Fatalf("addedCards returned %d cards, want 3: %+v", len(cards), cards)
+	}
+
+	// First: a plain successful add with quantity, line cost, and a thumbnail.
+	if c := cards[0]; c.CanonicalID != "p1" || c.Name != "Tomate" ||
+		c.Quantity != 3 || c.UnitCents != 200 || c.LineCents != 600 || c.Clamped {
+		t.Errorf("card[0] wrong: %+v", c)
+	}
+	if !strings.Contains(cards[0].Thumbnail, "w_160,h_160") {
+		t.Errorf("card[0] thumbnail not resized from cart image: %q", cards[0].Thumbnail)
+	}
+	if cards[0].UnitWeight != "610 g" {
+		t.Errorf("card[0] unit weight = %q, want 610 g", cards[0].UnitWeight)
+	}
+
+	// Second: clamped add is flagged.
+	if !cards[1].Clamped {
+		t.Errorf("card[1] should be clamped: %+v", cards[1])
+	}
+
+	// Third: missing name falls back to canonicalId; no image/weight → empty.
+	if cards[2].Name != "p9" || cards[2].Thumbnail != "" || cards[2].UnitWeight != "" {
+		t.Errorf("card[2] fallback wrong: %+v", cards[2])
 	}
 }
 
