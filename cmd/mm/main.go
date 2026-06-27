@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,7 +16,10 @@ import (
 	"github.com/dslh/mm/internal/ops"
 )
 
-const defaultStatePath = ".auth/state.json"
+// legacyStatePath is the original working-directory-relative location. It is
+// still honored when present (this repo uses it for dev, and existing installs
+// already have one) so upgrading doesn't strand a session.
+const legacyStatePath = ".auth/state.json"
 
 var jsonOut bool
 
@@ -111,11 +115,40 @@ type usageError string
 
 func (u usageError) Error() string { return string(u) }
 
+// statePath resolves where the session cookie lives. Precedence:
+//  1. $MM_STATE — explicit override, always wins.
+//  2. ./.auth/state.json — if it already exists (dev repo, pre-upgrade installs).
+//  3. <user config dir>/mm/state.json — the stable default, independent of the
+//     working directory so `mm` finds the same session wherever it's run from
+//     (e.g. installed on PATH via scoop/Homebrew).
+//
+// If the user config dir can't be determined, fall back to the legacy relative
+// path so mm still works rather than failing outright.
 func statePath() string {
 	if p := os.Getenv("MM_STATE"); p != "" {
 		return p
 	}
-	return defaultStatePath
+	if _, err := os.Stat(legacyStatePath); err == nil {
+		return legacyStatePath
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return legacyStatePath
+	}
+	return filepath.Join(dir, "mm", "state.json")
+}
+
+// credentialsPath is statePath() resolved to an absolute location for display.
+// The default is relative to the working directory, which is easy to lose track
+// of once mm is on PATH (e.g. via scoop on Windows); an absolute path is
+// unambiguous when telling the user where to re-auth. Falls back to the raw
+// path if Abs fails.
+func credentialsPath() string {
+	p := statePath()
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 func newOps() (*ops.Ops, func(), error) {
@@ -209,7 +242,7 @@ func usageTo(w io.Writer) {
 
 flags: --json      machine-readable output
        --version   print version and exit (also -v)
-env:   MM_STATE auth state path (default .auth/state.json)
+env:   MM_STATE auth state path (default: per-user config dir; see mm auth status)
 help:  mm help <command> [subcommand]  or  mm <command> --help   for detail
 `)
 }

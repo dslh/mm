@@ -22,8 +22,14 @@ a headed browser and read the XHR traffic via its `requests` / `request <n>` /
 `response-body <n>` commands. Claude (the assistant) never handles the password. Login
 itself is `POST /api/auth/signin` (see `docs/api.md`): `mm auth login` prompts you for
 email + password without echo, sends the password only in the signin request, and
-persists just the resulting `session` cookie to `.auth/state.json` (gitignored). A browser
-login captured with `state-save` produces an equivalent file and remains a fallback.
+persists just the resulting `session` cookie to the credentials file. By default that
+is `<user config dir>/mm/state.json` (`os.UserConfigDir()` — e.g.
+`~/Library/Application Support/mm/state.json` on macOS, `%AppData%\mm\state.json` on
+Windows), so the same session is found regardless of the working directory. A
+working-directory-relative `.auth/state.json` (gitignored) is still honored when present
+— it's what this repo uses for dev — and `$MM_STATE` overrides both. `mm auth status`
+prints the resolved path. A browser login captured with `state-save` produces an
+equivalent file and remains a fallback.
 
 ## Terms-of-service review (done 2026-06-11)
 
@@ -73,13 +79,25 @@ Go module `github.com/dslh/mm`. Layout per
 for the command surface.
 
 Register the MCP server with a client over stdio, e.g.
-`claude mcp add mm -- /abs/path/to/bin/mm mcp` (the server reads `.auth/state.json` from
-its working directory, or `$MM_STATE`). Tools mirror the CLI; cart mutation goes through
-the single `cart_apply` tool. See `docs/design.md` "MCP server".
+`claude mcp add mm -- /abs/path/to/bin/mm mcp` (the server reads the same credentials file
+as the CLI — per-user config dir by default, `./.auth/state.json` if present, or
+`$MM_STATE`; `mm auth status` prints the resolved path). Tools mirror the CLI; cart
+mutation goes through the single `cart_apply` tool. See `docs/design.md` "MCP server".
+
+## Releasing
+
+Releases are cut by pushing a SemVer tag (`vX.Y.Z`) to `main`: the
+`.github/workflows/release.yaml` workflow runs GoReleaser (`.goreleaser.yaml`), which
+cross-builds the binaries and publishes the Homebrew tap + Scoop bucket. The version,
+commit, and date are injected into `cmd/mm` via `-ldflags` from the tag — a plain
+`go build` reports `dev`/`none`. So: commit to `main`, `git tag vX.Y.Z`, push the tag.
+Follow SemVer; tags live on `main` (don't branch for a release). Pushing a tag publishes
+externally and is hard to undo — confirm before pushing.
 
 ## Notes on driving the API
 
-- Auth is just the `session` cookie (see `docs/api.md`). Persisted to `.auth/state.json`.
+- Auth is just the `session` cookie (see `docs/api.md`). Persisted to the credentials
+  file (per-user config dir by default; `mm auth status` prints the path).
 - Clicking product cards in playwright-cli is flaky: a price overlay intercepts pointer
   events on the add/remove buttons. The reliable path is to call the JSON API directly
   from the page context with `playwright-cli eval '() => fetch("/api/...", {...})'` — the

@@ -171,7 +171,7 @@ func registerUIResource(s *mcp.Server, name, uri, desc, html string) {
 func mcpError(err error) error {
 	var ae *api.APIError
 	if errors.As(err, &ae) && ae.IsAuth() {
-		return fmt.Errorf("session expired — recreate .auth/state.json via a browser login (see `mm auth login`): %w", err)
+		return fmt.Errorf("session expired — run `mm auth login` to refresh the credentials file: %w", err)
 	}
 	var de *api.DriftError
 	if errors.As(err, &de) {
@@ -367,17 +367,19 @@ func registerTools(s *mcp.Server, o *ops.Ops) {
 		})
 
 	mcpTool(s, "auth_status",
-		"Check the mon-marché session: whether it's valid (live probe) and when the cookie expires. If invalid, the user must re-login (see `mm auth login`).",
+		"Check the mon-marché session: whether it's valid (live probe), when the cookie expires, and the path to the credentials file. If invalid, the user (not you) must re-login by running `mm auth login` in a terminal — point them at the returned credentials path. You cannot re-auth yourself: login is interactive and needs their password.",
 		func(ctx context.Context, _ struct{}) (any, error) {
 			probeErr := o.API.ProbeAuth(ctx)
 			exp := o.API.SessionExpires() // read after the probe: a valid probe rolls it forward
 			out := map[string]any{
-				"valid":     probeErr == nil,
-				"expiresAt": exp.Format(time.RFC3339),
-				"daysLeft":  int(time.Until(exp).Hours() / 24),
+				"valid":       probeErr == nil,
+				"expiresAt":   exp.Format(time.RFC3339),
+				"daysLeft":    int(time.Until(exp).Hours() / 24),
+				"credentials": credentialsPath(),
 			}
 			if probeErr != nil {
 				out["detail"] = probeErr.Error()
+				out["reauth"] = "ask the user to run `mm auth login` in a terminal; it refreshes the credentials file above"
 			}
 			return out, nil
 		})

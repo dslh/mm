@@ -95,18 +95,28 @@ plan (lines, prices, availability) without mutating.
 
 ### Session state
 
-`.auth/state.json` is Playwright storage-state format. The client extracts only the
+The credentials file is Playwright storage-state format. The client extracts only the
 `session` cookie for `www.mon-marche.fr` and ignores the rest (analytics). Because the
 cookie is a sliding 60-day window whose token never rotates (api.md "Lifetime"), the
 client captures `Set-Cookie` from responses and **rewrites the cookie's `expires` (and
-value, defensively) back into `.auth/state.json`** after a run, so `mm auth status` reads
+value, defensively) back into the file** after a run, so `mm auth status` reads
 an accurate date without contacting the site. The token value is never printed or logged.
+
+The path is resolved (in `cmd/mm`, not the library) in this precedence: `$MM_STATE` if
+set; else a working-directory-relative `./.auth/state.json` if it already exists (the dev
+repo's location, and pre-upgrade installs); else the stable per-user default
+`<os.UserConfigDir()>/mm/state.json` (e.g. `~/Library/Application Support/mm/state.json`
+on macOS, `%AppData%\mm\state.json` on Windows). The per-user default means `mm` finds
+the same session wherever it's invoked from — important once it's installed on `PATH`
+(scoop/Homebrew) rather than run out of the repo. `mm auth status` prints the resolved
+absolute path (text and JSON `credentials` field).
 
 Login is direct: `mm auth login` signs in via `POST /api/auth/signin` (api.md "Login"),
 prompting for email + password without echo and persisting only the `session` cookie to
-`.auth/state.json`. The password is sent solely in the signin body — never logged, stored,
-or kept after the call. A headed browser login captured with `playwright-cli state-save`
-produces an equivalent file and remains a fallback if signin ever changes (captcha, etc.).
+the credentials file (creating its parent directory if needed). The password is sent
+solely in the signin body — never logged, stored, or kept after the call. A headed browser
+login captured with `playwright-cli state-save` produces an equivalent file and remains a
+fallback if signin ever changes (captcha, etc.).
 
 ### Error taxonomy (from api.md "Failure modes")
 
@@ -197,6 +207,12 @@ Implementation notes:
   and the un-synchronized session state is never touched concurrently. Session expiry rolls
   forward in memory from `Set-Cookie` and is written back on shutdown.
 - **Errors** map the library taxonomy to tool errors (`isError` + message) so the agent can
-  self-correct: auth → "recreate `.auth/state.json`"; drift → "re-verify per docs/api.md".
-  `auth_status` is the exception — an expired session returns `valid:false` rather than
-  erroring, since reporting that is its job.
+  self-correct: auth → "run `mm auth login` to refresh the credentials file"; drift →
+  "re-verify per docs/api.md". A *valid* credentials file is required at startup: if it is
+  missing or unparseable, `mm mcp` fails to start (the load error names the path and points
+  at `mm auth login`) and no tools register — so the missing-file case surfaces in the MCP
+  client's server logs, not as a tool error. An *expired* session, by contrast, loads fine
+  and surfaces per-call as the actionable auth tool error above. `auth_status` is the
+  exception to erroring — it returns `valid:false` (plus the credentials path, expiry, and
+  the probe `detail`) rather than erroring, since reporting that is its job and it gives the
+  agent what it needs to walk the user through re-auth.

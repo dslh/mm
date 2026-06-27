@@ -26,30 +26,33 @@ var helpTree = []*cmdHelp{
 		args:    "<status|login>",
 		summary: "session status, or how to (re-)create it",
 		long: "Inspect or renew the login session. Auth is just the `session` cookie,\n" +
-			"persisted to .auth/state.json (or $MM_STATE). The password is read without\n" +
-			"echo, sent only to the signin endpoint, and never logged or stored — only the\n" +
+			"persisted under your per-user config dir (run `mm auth status` to see the\n" +
+			"exact path; override with $MM_STATE). The password is read without echo,\n" +
+			"sent only to the signin endpoint, and never logged or stored — only the\n" +
 			"resulting cookie is saved.",
 		subs: []*cmdHelp{
 			{
 				name:    "status",
 				summary: "session validity and expiry",
-				long: "Reports the cookie's expiry and runs a live probe against the API to\n" +
-					"confirm the session still works. A successful probe rolls the sliding\n" +
-					"60-day window forward.",
-				sample: "session cookie: expires 2026-08-13 (~60 days; sliding 60-day window)\n" +
+				long: "Reports the credentials file location and the cookie's expiry, then\n" +
+					"runs a live probe against the API to confirm the session still works.\n" +
+					"A successful probe rolls the sliding 60-day window forward.",
+				sample: "credentials:    /home/you/.config/mm/state.json\n" +
+					"session cookie: expires 2026-08-13 (~60 days; sliding 60-day window)\n" +
 					"live probe: OK — session is valid",
 			},
 			{
 				name:    "login",
 				summary: "sign in and save a fresh session",
 				long: "Prompts for your mon-marché email and password, signs in via\n" +
-					"POST /auth/signin, writes the session cookie to .auth/state.json, and\n" +
-					"verifies it with a live probe. The password is read without echo and is\n" +
-					"never logged or stored. When stdin is piped it reads two lines (email,\n" +
-					"then password) so it can be scripted from a password manager.",
+					"POST /auth/signin, writes the session cookie to the credentials file\n" +
+					"(per-user config dir by default; $MM_STATE to override), and verifies it\n" +
+					"with a live probe. The password is read without echo and is never logged\n" +
+					"or stored. When stdin is piped it reads two lines (email, then password)\n" +
+					"so it can be scripted from a password manager.",
 				sample: "mon-marché email: you@example.com\n" +
 					"password (hidden):\n" +
-					"logged in — session saved to .auth/state.json (expires 2026-08-16)\n" +
+					"logged in — session saved to /home/you/.config/mm/state.json (expires 2026-08-16)\n" +
 					"live probe: OK — session is valid",
 			},
 		},
@@ -199,7 +202,9 @@ dry run — cart not modified`,
 			"operations as tools for an MCP client. Cart mutation goes through a single\n" +
 			"cart_apply tool. Register with:\n" +
 			"  claude mcp add mm -- /abs/path/to/bin/mm mcp\n" +
-			"The server reads .auth/state.json from its working directory, or $MM_STATE.",
+			"The server reads the same credentials file as the CLI (per-user config dir\n" +
+			"by default, or ./.auth/state.json if present, or $MM_STATE). Run\n" +
+			"`mm auth status` to confirm the exact path.",
 	},
 	{
 		name:    "version",
